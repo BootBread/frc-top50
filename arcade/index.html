@@ -1,0 +1,995 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>POWER UP Arcade</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500;700&family=Alegreya+SC:wght@700&display=swap">
+<style>
+/* Layout: a calm tabletop console. Light gray page, white cards, a 4-step flow (team > build > lobby > match).
+   Plex Sans for UI, Plex Mono for numbers and commands, Alegreya SC only for robot names (the drop of D&D).
+   One deliberate light look, so every color is set here and there are no dark-mode blocks. */
+:root {
+  --bg: #eceef2;
+  --card: #ffffff;
+  --sunken: #f5f6f9;
+  --ink: #1b1f2a;
+  --muted: #5d6475;
+  --line: #d6dae1;
+  --line-strong: #b5bcc8;
+  --navy: #1d2b64;
+  --navy-ink: #ffffff;
+  --red: #c0262d;
+  --blue: #1f4fbf;
+  --tintR: #f9e4e4;
+  --tintB: #e2e9f8;
+  --cube: #f2c200;
+  --cubeEdge: #8a6d00;
+  --reach: #fff1a1;
+  --ok: #1e7b34;
+  --okTint: #d5efda;
+  --bad: #c0262d;
+  --badTint: #f7d9d9;
+  --gold: #9a6f00;
+  --fence: #c4c8d0;
+  --tower: #3f4656;
+  --scrim: rgba(15, 20, 35, .45);
+  --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Consolas, "Courier New", monospace;
+  --fancy: "Alegreya SC", Georgia, "Times New Roman", serif;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--sans); font-size: 15px; line-height: 1.45;
+  padding-block: 16px 32px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+a { color: var(--blue); }
+.wrap { max-width: 1040px; margin: 0 auto; display: grid; gap: 14px; }
+.top { display: flex; flex-wrap: wrap; gap: 10px 20px; align-items: center; justify-content: space-between; }
+h1 { font-family: var(--mono); font-size: 22px; letter-spacing: .02em; margin: 0; text-wrap: balance; }
+h1 span { color: var(--muted); font-weight: 500; }
+h2 { font-size: 18px; margin: 0; text-wrap: balance; }
+p { margin: 0; max-width: 68ch; }
+hr { display: none; }
+
+.steps { display: flex; flex-wrap: wrap; gap: 4px; background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 4px; }
+.steps button { border: 0; box-shadow: none; background: transparent; color: var(--muted); font-weight: 500; }
+.steps button:disabled { color: var(--line-strong); background: transparent; }
+.steps button[aria-current="step"] { background: var(--navy); color: var(--navy-ink); }
+
+fieldset { border: 1px solid var(--line); border-radius: 10px; background: var(--card); margin: 0; padding: 12px 14px 14px; min-width: 0; }
+legend { float: left; width: 100%; padding: 0; margin: 0 0 10px; font-size: 12px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+legend + * { clear: both; }
+.stack { display: grid; gap: 12px; min-width: 0; }
+.inset { background: var(--sunken); border: 1px solid var(--line); border-radius: 6px; }
+.note { font-size: 13px; color: var(--muted); }
+.err { color: var(--bad); font-weight: 600; min-height: 1.3em; }
+
+button { font-family: var(--sans); font-size: 14px; font-weight: 500; background: var(--card); color: var(--ink); padding: 6px 12px; border: 1px solid var(--line-strong); border-radius: 6px; cursor: pointer; box-shadow: 0 1px 0 rgba(20, 25, 40, .05); }
+button:hover:not(:disabled) { background: var(--sunken); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+button:disabled { color: var(--line-strong); cursor: default; }
+button.big { font-size: 15px; font-weight: 600; padding: 9px 18px; background: var(--navy); color: var(--navy-ink); border-color: var(--navy); }
+button.big:hover:not(:disabled) { background: var(--navy); filter: brightness(1.15); }
+button.big:disabled { background: var(--line); border-color: var(--line); color: var(--muted); }
+input[type=text], select { font-family: var(--mono); font-size: 15px; padding: 6px 8px; background: var(--card); color: var(--ink); border: 1px solid var(--line-strong); border-radius: 6px; }
+label { font-weight: 600; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 350px); gap: 14px; align-items: start; }
+@media (max-width: 860px) { .two { grid-template-columns: minmax(0, 1fr); } }
+table { border-collapse: collapse; }
+
+/* ---------- step 1 ---------- */
+.teamform { display: grid; gap: 8px; max-width: 420px; }
+.teamform input { width: 100%; }
+#teamNum { font-size: 30px; font-weight: 700; letter-spacing: .08em; padding: 8px 12px; }
+
+/* ---------- step 2: builder ---------- */
+.choices { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 8px; }
+.choice { display: grid; gap: 3px; padding: 8px 10px; background: var(--card); border: 1px solid var(--line-strong); border-radius: 8px; cursor: pointer; font-weight: 400; }
+.choice input { margin: 0 6px 0 0; accent-color: var(--navy); }
+.choice:has(input:checked) { border-color: var(--navy); box-shadow: inset 0 0 0 1px var(--navy); background: var(--sunken); }
+.choice b { font-size: 15px; }
+.choice span { font-size: 13px; color: var(--muted); }
+.choice span:first-child { color: var(--ink); }
+.stats { width: 100%; font-size: 14px; }
+.stats th, .stats td { border-bottom: 1px solid var(--line); padding: 6px; text-align: left; vertical-align: middle; }
+.stats th { font-size: 11px; letter-spacing: .07em; color: var(--muted); font-weight: 600; }
+.stats td.n { font-family: var(--mono); font-weight: 700; text-align: center; font-variant-numeric: tabular-nums; width: 3.5em; }
+.stats small { color: var(--muted); }
+.stats tr.sel td { background: var(--reach); }
+.stats tr.swap { cursor: pointer; }
+.stats tr.swap:hover td { background: var(--sunken); }
+.pm { display: inline-flex; gap: 4px; }
+.pm button { width: 30px; padding: 2px 0; font-family: var(--mono); font-weight: 700; }
+.dice { display: inline-flex; gap: 3px; font-family: var(--mono); }
+.dice i { font-style: normal; width: 24px; height: 24px; display: inline-grid; place-items: center; border: 1px solid var(--ink); border-radius: 4px; background: var(--card); font-weight: 700; }
+.dice i.drop { color: var(--line-strong); border-color: var(--line-strong); text-decoration: line-through; }
+.pool { font-family: var(--mono); font-weight: 700; }
+
+/* character sheet */
+.sheet { background: var(--card); border: 3px double var(--ink); border-radius: 4px; padding: 10px; display: grid; gap: 8px; }
+.sheet .nm { font-family: var(--fancy); font-size: 24px; line-height: 1.1; overflow-wrap: anywhere; }
+.sheet .sub { font-size: 13px; color: var(--muted); }
+.abil { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.ab { border: 1.5px solid var(--ink); border-radius: 6px; text-align: center; padding: 3px 0 5px; background: var(--card); }
+.ab .k { font-size: 11px; font-weight: 600; letter-spacing: .08em; color: var(--muted); }
+.ab .m { font-family: var(--mono); font-size: 20px; font-weight: 700; line-height: 1.15; }
+.ab .s { font-family: var(--mono); font-size: 12px; display: inline-block; border: 1px solid var(--ink); border-radius: 50%; min-width: 26px; padding: 1px 2px; }
+.sheet table { width: 100%; font-size: 13px; }
+.sheet td { border-top: 1px solid var(--line); padding: 4px 2px; vertical-align: top; }
+.sheet td.k { font-weight: 600; white-space: nowrap; width: 1%; padding-right: 10px; }
+.sheet.sR { border-color: var(--red); } .sheet.sB { border-color: var(--blue); }
+
+/* ---------- step 3: lobby ---------- */
+.code { font-family: var(--mono); font-size: 26px; font-weight: 700; letter-spacing: .12em; background: var(--navy); color: var(--cube); padding: 2px 12px; border-radius: 6px; }
+#inviteLink { flex: 1; min-width: 0; font-size: 14px; }
+.slots { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+@media (max-width: 640px) { .slots { grid-template-columns: minmax(0, 1fr); } }
+.slot { display: grid; gap: 8px; align-content: start; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); }
+.slot h3 { margin: 0; font-size: 13px; letter-spacing: .08em; padding: 4px 8px; color: var(--navy-ink); border-radius: 4px; }
+.slot h3.hR { background: var(--red); } .slot h3.hB { background: var(--blue); }
+.waiting { background: var(--card); border: 1.5px dashed var(--line-strong); border-radius: 8px; padding: 22px 12px; text-align: center; display: grid; gap: 8px; }
+.ready { font-family: var(--mono); font-weight: 700; font-size: 13px; padding: 2px 8px; border-radius: 99px; }
+.ready.yes { color: var(--ok); background: var(--okTint); } .ready.no { color: var(--bad); background: var(--badTint); }
+#chat { height: 150px; overflow-y: auto; padding: 6px 8px; font-family: var(--mono); font-size: 13px; }
+#chat .sys { color: var(--muted); }
+#chatIn { flex: 1; min-width: 0; }
+
+/* ---------- step 4: match ---------- */
+.mgrid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; }
+@media (max-width: 920px) { .mgrid { grid-template-columns: minmax(0, 1fr); } }
+.fieldbox { overflow-x: auto; padding: 8px; }
+.field { display: grid; grid-template-columns: 18px repeat(11, 46px); grid-template-rows: 18px repeat(7, 46px); gap: 3px; width: max-content; font-family: var(--mono); }
+.lbl { display: grid; place-items: center; font-size: 12px; font-weight: 700; color: var(--muted); }
+.cell { position: relative; display: grid; place-items: center; background: var(--card); border: 1px solid var(--line); border-radius: 4px; font-size: 10px; }
+.cell.zR { background: var(--tintR); } .cell.zB { background: var(--tintB); }
+.cell.fence { background: repeating-linear-gradient(45deg, var(--fence) 0 4px, var(--sunken) 4px 8px); border-color: var(--line-strong); }
+.cell.tower { background: var(--tower); color: var(--navy-ink); font-weight: 700; }
+.cell.plat { border-style: dashed; border-color: var(--muted); }
+.cell.plat.zR { border-color: var(--red); } .cell.plat.zB { border-color: var(--blue); }
+.cell.line { box-shadow: inset 3px 0 0 var(--ink); }
+.cell.lineB { box-shadow: inset -3px 0 0 var(--ink); }
+.cell.reach { background: var(--reach); cursor: pointer; }
+.cell.reach.empty::after { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ink); opacity: .3; position: absolute; }
+.cell.reach:hover { outline: 2px solid var(--ink); z-index: 1; }
+.tag { font-size: 9px; font-weight: 700; letter-spacing: .03em; text-align: center; line-height: 1.05; }
+.plate { width: 38px; height: 38px; display: grid; place-items: center; align-content: center; border-radius: 4px; }
+.plate b { font-size: 16px; line-height: 1; }
+.plate small { font-size: 8px; letter-spacing: .05em; }
+.badge { position: absolute; top: 1px; right: 1px; font-size: 10px; font-weight: 700; padding: 0 3px; border-radius: 3px; }
+.cubes { display: flex; flex-wrap: wrap; gap: 2px; justify-content: center; max-width: 34px; font-size: 10px; font-weight: 700; }
+.cube { display: inline-block; width: 10px; height: 10px; background: var(--cube); border: 1px solid var(--cubeEdge); border-radius: 2px; }
+.bot { width: 40px; height: 40px; display: grid; place-items: center; align-content: center; background: var(--card); border: 5px solid; border-radius: 6px; font-size: 11px; font-weight: 700; position: relative; z-index: 2; }
+.bot.R { border-color: var(--red); color: var(--red); } .bot.B { border-color: var(--blue); color: var(--blue); }
+.bot .cube { position: absolute; bottom: -4px; right: -4px; }
+.bot.now { outline: 2px dashed var(--ink); outline-offset: 2px; animation: pulse 1s steps(2) infinite; }
+@keyframes pulse { 50% { outline-color: transparent; } }
+.fkey { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px; color: var(--muted); align-items: center; }
+.fkey .sw { display: inline-block; width: 14px; height: 14px; vertical-align: -2px; border: 1px solid var(--ink); border-radius: 3px; margin-right: 4px; }
+
+.banner { font-family: var(--mono); font-weight: 700; font-size: 14px; padding: 8px 10px; border-radius: 6px; background: var(--sunken); border: 1px solid var(--line); border-left: 5px solid var(--ink); display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: space-between; }
+.banner.R { color: var(--red); border-left-color: var(--red); } .banner.B { color: var(--blue); border-left-color: var(--blue); }
+.cmdrow { display: flex; gap: 6px; align-items: center; font-family: var(--mono); }
+#prompt { white-space: nowrap; font-family: var(--mono); }
+#cmd { flex: 1; min-width: 0; }
+.odds { font-family: var(--mono); font-size: 13px; min-height: 1.3em; }
+.odds .good { color: var(--ok); font-weight: 700; } .odds .warn { color: var(--bad); }
+.btns { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.diebox { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 12px; align-items: center; }
+#die { width: 110px; height: 110px; display: block; }
+#die .o { fill: var(--card); stroke: var(--ink); stroke-width: 3; stroke-linejoin: round; }
+#die .i { fill: var(--sunken); stroke: var(--ink); stroke-width: 2; stroke-linejoin: round; }
+#die line { stroke: var(--ink); stroke-width: 2; }
+#die text { font-family: var(--mono); font-weight: 700; font-size: 26px; fill: var(--ink); text-anchor: middle; }
+#die.ok .i { fill: var(--okTint); } #die.no .i { fill: var(--badTint); } #die.crit .i { fill: var(--cube); } #die.crit .o { stroke: var(--gold); }
+#die.spin { animation: wob .5s linear; }
+@keyframes wob { 25% { transform: rotate(-12deg); } 75% { transform: rotate(12deg); } }
+.diebtn { padding: 0; border: 0; background: none; box-shadow: none; cursor: default; display: block; border-radius: 50%; }
+.diebtn:hover:not(:disabled) { background: none; }
+.diebtn:not(:disabled) { cursor: pointer; }
+.diebtn:disabled { color: inherit; }
+#die.ready .i { fill: var(--reach); }
+#die.ready { animation: bob .8s ease-in-out infinite alternate; }
+@keyframes bob { to { transform: translateY(-5px); } }
+.dcap { display: grid; gap: 2px; min-width: 0; }
+.dcap .what { font-size: 13px; }
+.dcap .math { font-family: var(--mono); font-size: 14px; }
+.dcap .res { font-family: var(--mono); font-size: 17px; font-weight: 700; line-height: 1.15; }
+.dcap .res.ok { color: var(--ok); } .dcap .res.no { color: var(--bad); } .dcap .res.crit { color: var(--gold); }
+
+.score { width: 100%; font-family: var(--mono); text-align: center; }
+.score td, .score th { border: 1px solid var(--line); padding: 3px 4px; }
+.score th { font-size: 12px; letter-spacing: .08em; }
+.score .big { font-size: 34px; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.score .r { color: var(--red); } .score .b { color: var(--blue); }
+.score td[colspan] { font-family: var(--sans); font-size: 13px; }
+.mini { width: 100%; font-family: var(--mono); font-size: 12px; }
+.mini td { border-bottom: 1px solid var(--line); padding: 4px; }
+.mini td.k { width: 1%; white-space: nowrap; font-weight: 700; }
+.order { margin: 0; padding-left: 22px; font-family: var(--mono); font-size: 13px; }
+.order li.done { color: var(--line-strong); text-decoration: line-through; }
+.order li.now { font-weight: 700; }
+.R { color: var(--red); } .B { color: var(--blue); }
+.plate.R, .plate.B, .badge.R, .badge.B { color: var(--navy-ink); }
+.plate.R, .badge.R { background: var(--red); } .plate.B, .badge.B { background: var(--blue); }
+#log { height: 220px; overflow-y: auto; padding: 6px 8px; font-family: var(--mono); font-size: 12.5px; }
+#log div { white-space: pre-wrap; }
+#log .rnd { font-weight: 700; color: var(--navy); margin-top: 4px; }
+#log .roll { color: var(--muted); }
+#log .ok { color: var(--ok); font-weight: 700; } #log .no { color: var(--bad); font-weight: 700; }
+#log b.R { color: var(--red); } #log b.B { color: var(--blue); }
+.results { background: var(--card); border: 3px double var(--ink); border-radius: 4px; padding: 12px; display: grid; gap: 8px; }
+.results .w { font-family: var(--fancy); font-size: 28px; line-height: 1.1; }
+.timer { font-family: var(--mono); }
+.timer.low { color: var(--bad); }
+.foot { font-size: 12px; color: var(--muted); text-align: center; }
+
+/* pop-up */
+.modal { position: fixed; inset: 0; z-index: 50; background: var(--scrim); display: grid; place-items: center;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.win { width: 100%; max-width: 400px; background: var(--card); border-radius: 14px; box-shadow: 0 18px 50px rgba(15, 20, 35, .35); overflow: hidden; animation: popin .18s ease-out; }
+@keyframes popin { from { transform: translateY(8px) scale(.97); opacity: .4; } }
+.titlebar { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 16px 16px 0 20px; font-family: var(--fancy); font-size: 24px; line-height: 1.1; }
+.titlebar button { border: 0; box-shadow: none; background: transparent; color: var(--muted); font-size: 16px; padding: 2px 8px; }
+.wbody { display: flex; gap: 16px; align-items: center; padding: 12px 20px 18px; }
+.wicon { flex: none; width: 58px; height: 58px; display: grid; place-items: center; font-family: var(--mono); font-size: 22px; font-weight: 700; background: var(--cube); clip-path: polygon(50% 0, 100% 25%, 100% 75%, 50% 100%, 0 75%, 0 25%); }
+.wtext { font-size: 15px; min-width: 0; }
+.wbtns { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 16px; background: var(--sunken); border-top: 1px solid var(--line); }
+.wbtns button { min-width: 96px; }
+.wbtns button:first-child { background: var(--navy); color: var(--navy-ink); border-color: var(--navy); font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .bot.now, #die.spin, #die.ready, .win { animation: none; } }
+</style>
+
+</head>
+<body>
+<style>
+.joinnote { padding: 8px 10px; border-radius: 6px; background: var(--reach); border: 1px solid var(--cubeEdge); }
+.conn { font-size: 12px; font-family: var(--mono); padding: 2px 8px; border-radius: 99px; background: var(--okTint); color: var(--ok); }
+.conn.off { background: var(--badTint); color: var(--bad); }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); margin-right: 4px; }
+.dot.off { background: var(--line-strong); }
+.lobbyerr { color: var(--bad); font-weight: 600; min-height: 1.2em; }
+</style>
+
+<div class="wrap">
+  <div class="top">
+    <h1>POWER UP <span>Arcade</span></h1>
+    <nav class="steps" id="steps" aria-label="Steps">
+      <button type="button" data-go="team">1. Team</button>
+      <button type="button" data-go="build">2. Build Robot</button>
+      <button type="button" data-go="lobby">3. Lobby</button>
+      <button type="button" data-go="match">4. Match</button>
+    </nav>
+  </div>
+
+  <!-- ============ STEP 1 ============ -->
+  <section id="scr-team" class="stack">
+    <fieldset>
+      <legend>Step 1 · Who goes there?</legend>
+      <div class="stack">
+        <div class="joinnote" id="joinNote" hidden></div>
+        <p>Every robot needs a team number. Type <b>any</b> number: your real team, your favorite team, or one you made up.</p>
+        <div class="teamform">
+          <label for="teamNum">Team number</label>
+          <input type="text" id="teamNum" inputmode="numeric" maxlength="5" autocomplete="off" placeholder="e.g. 4414">
+          <label for="teamNick">Team nickname <span class="note">(optional)</span></label>
+          <input type="text" id="teamNick" maxlength="30" autocomplete="off" placeholder="e.g. The Gearheads">
+          <div class="err" id="teamErr" aria-live="polite"></div>
+          <div><button type="button" class="big" id="toBuild">Create my robot &gt;&gt;</button></div>
+        </div>
+      </div>
+    </fieldset>
+  </section>
+
+  <!-- ============ STEP 2 ============ -->
+  <section id="scr-build" class="stack" hidden>
+    <div class="two">
+      <div class="stack">
+        <fieldset>
+          <legend>Step 2 · Name your robot</legend>
+          <div class="row">
+            <label for="botName">Robot name</label>
+            <input type="text" id="botName" maxlength="24" autocomplete="off" style="flex:1;min-width:0">
+            <button type="button" id="randName">Random</button>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Choose one feat</legend>
+          <div class="choices" id="feats"></div>
+        </fieldset>
+        <fieldset>
+          <legend>Ability scores</legend>
+          <div class="stack">
+            <div class="row">
+              <label class="choice" style="display:flex"><input type="radio" name="method" value="buy" checked>Point buy (20 points)</label>
+              <label class="choice" style="display:flex"><input type="radio" name="method" value="roll">Roll 4d6, drop the lowest</label>
+              <button type="button" id="reroll" hidden>Roll again</button>
+            </div>
+            <div class="note" id="methodNote"></div>
+            <table class="stats" id="stats"></table>
+          </div>
+        </fieldset>
+      </div>
+      <div class="stack">
+        <fieldset>
+          <legend>Character sheet</legend>
+          <div id="buildSheet"></div>
+        </fieldset>
+        <button type="button" class="big" id="toLobby">Create a room &gt;&gt;</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ STEP 3 ============ -->
+  <section id="scr-lobby" class="stack" hidden>
+    <fieldset>
+      <legend>Step 3 · Lobby</legend>
+      <div class="stack">
+        <div class="row">
+          <span>Room code</span><span class="code" id="roomCode">----</span>
+          <span class="conn off" id="conn">connecting…</span>
+        </div>
+        <div class="row">
+          <label for="inviteLink">Invite link</label>
+          <input type="text" id="inviteLink" readonly>
+          <button type="button" id="copyLink">Copy link</button>
+          <span class="note" id="copyMsg" aria-live="polite"></span>
+        </div>
+        <div class="lobbyerr" id="lobbyErr" aria-live="polite"></div>
+        <div class="slots">
+          <div class="slot" id="slotR"></div>
+          <div class="slot" id="slotB"></div>
+        </div>
+        <div class="row">
+          <button type="button" id="swapSides">Swap sides</button>
+          <label for="timerSel">Turn timer</label>
+          <select id="timerSel"><option value="30">30 sec</option><option value="60">60 sec</option><option value="120">2 min</option><option value="0">None (play by mail)</option></select>
+          <span class="note">1v1 · one robot per alliance · 15 rounds</span>
+        </div>
+        <div class="row"><button type="button" class="big" id="startMatch" disabled>START MATCH</button><span class="note" id="startNote"></span></div>
+      </div>
+    </fieldset>
+    <fieldset>
+      <legend>Lobby chat</legend>
+      <div class="stack">
+        <div id="chat" class="inset" aria-live="polite"></div>
+        <div class="row"><input type="text" id="chatIn" maxlength="120" autocomplete="off" placeholder="say something nice (gracious professionalism)"><button type="button" id="chatSend">Send</button></div>
+      </div>
+    </fieldset>
+  </section>
+
+  <!-- ============ STEP 4 ============ -->
+  <section id="scr-match" class="stack" hidden>
+    <div class="mgrid">
+      <div class="stack">
+        <fieldset>
+          <legend id="fieldLegend">Field</legend>
+          <div class="stack">
+            <div class="fieldbox inset"><div class="field" id="grid" aria-label="Game field"></div></div>
+            <div class="fkey">
+              <span><span class="sw" style="background:var(--red)"></span>/<span class="sw" style="background:var(--blue)"></span>plate + cube count</span>
+              <span><span class="cube"></span> power cube</span>
+              <span><span class="sw" style="background:repeating-linear-gradient(45deg,var(--fence) 0 3px,var(--sunken) 3px 6px)"></span>switch fence</span>
+              <span><span class="sw" style="background:var(--reach)"></span>you can move here</span>
+              <span>dashed = platform zone (climb)</span>
+              <span>thick black edge = auto line</span>
+            </div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Command</legend>
+          <div class="stack">
+            <div id="banner" class="banner"></div>
+            <div id="results" hidden></div>
+            <div class="cmdrow">
+              <label for="cmd" id="prompt">&gt;</label>
+              <input type="text" id="cmd" autocomplete="off" spellcheck="false" placeholder="try: m c4   or   place switch   or   help">
+              <button type="button" id="go">Enter</button>
+            </div>
+            <div class="odds" id="odds" aria-live="polite"></div>
+            <div class="btns" id="quick">
+              <button type="button" data-fill="m ">Move</button>
+              <button type="button" data-fill="intake">Intake</button>
+              <button type="button" data-fill="place switch">Place switch</button>
+              <button type="button" data-fill="place scale">Place scale</button>
+              <button type="button" data-fill="exchange">Exchange</button>
+              <button type="button" data-fill="climb">Climb</button>
+              <button type="button" data-fill="play boost 2">Vault</button>
+              <button type="button" data-fill="end">End turn</button>
+              <button type="button" data-fill="help">Help</button>
+            </div>
+            <div class="note">Click a yellow square to drive there. Type a command to see your odds before you roll. Up arrow repeats your last command.</div>
+          </div>
+        </fieldset>
+      </div>
+      <div class="stack">
+        <fieldset>
+          <legend>The die</legend>
+          <div class="diebox">
+            <button type="button" class="diebtn" id="dieBtn" aria-label="Roll the die" disabled><svg id="die" viewBox="0 0 100 100" aria-hidden="true">
+              <polygon class="o" points="50,4 92,28 92,72 50,96 8,72 8,28"></polygon>
+              <polygon class="i" points="50,20 80,68 20,68"></polygon>
+              <line x1="50" y1="4" x2="50" y2="20"></line><line x1="8" y1="28" x2="50" y2="20"></line><line x1="92" y1="28" x2="50" y2="20"></line>
+              <line x1="8" y1="28" x2="20" y2="68"></line><line x1="92" y1="28" x2="80" y2="68"></line>
+              <line x1="8" y1="72" x2="20" y2="68"></line><line x1="92" y1="72" x2="80" y2="68"></line>
+              <line x1="50" y1="96" x2="20" y2="68"></line><line x1="50" y1="96" x2="80" y2="68"></line>
+              <text id="dieN" x="50" y="60">20</text>
+            </svg></button>
+            <div class="dcap" aria-live="polite">
+              <div class="what" id="dWhat">Waiting for the first roll.</div>
+              <div class="math" id="dMath"></div>
+              <div class="res" id="dRes"></div>
+            </div>
+          </div>
+        </fieldset>
+        <fieldset>
+          <legend>Scoreboard</legend>
+          <table class="score">
+            <tr><th class="r">RED</th><th class="b">BLUE</th></tr>
+            <tr><td class="big r" id="sR">0</td><td class="big b" id="sB">0</td></tr>
+            <tr><td colspan="2" id="clock"></td></tr>
+            <tr><td colspan="2" id="own"></td></tr>
+          </table>
+        </fieldset>
+        <fieldset>
+          <legend>Turn order</legend>
+          <ol class="order" id="order"></ol>
+        </fieldset>
+        <fieldset>
+          <legend>Robots</legend>
+          <table class="mini" id="robots"></table>
+        </fieldset>
+        <fieldset>
+          <legend>Vault</legend>
+          <table class="mini" id="vault"></table>
+          <div class="note" id="pu"></div>
+        </fieldset>
+      </div>
+    </div>
+    <fieldset>
+      <legend>Play-by-play</legend>
+      <div id="log" class="inset" aria-live="polite"></div>
+    </fieldset>
+  </section>
+
+  <div class="foot">Rules adapted from the 2018 FRC Game Manual (POWER UP) for one robot per alliance. Dice are rolled on the server. Part of <a href="../index.html">FRC TOP 50</a>.</div>
+</div>
+
+<div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle" hidden>
+  <div class="win">
+    <div class="titlebar"><span id="modalTitle">Message</span><button type="button" id="modalX" aria-label="Close">x</button></div>
+    <div class="wbody"><div class="wicon" id="modalIcon" aria-hidden="true">!</div><div class="wtext" id="modalBody"></div></div>
+    <div class="wbtns" id="modalBtns"></div>
+  </div>
+</div>
+
+<script type="module">
+import * as E from "./engine.js";
+
+// Room server. Local testing talks to `wrangler dev`; the live site talks to the deployed Worker.
+const LOCAL = location.hostname === "localhost" || location.hostname === "127.0.0.1";
+const SERVER = LOCAL ? "ws://localhost:8787" : "wss://frc-arcade.frctop50.workers.dev";
+
+const $ = (id) => document.getElementById(id);
+const esc = E.esc, sgn = E.sgn;
+const rng = Math.random;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const store = {
+  get(k) { try { return JSON.parse(localStorage.getItem("arcade." + k)); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem("arcade." + k, JSON.stringify(v)); } catch {} },
+};
+const CODE_RE = /^[A-HJ-NP-Z2-9]{4}$/;
+
+// ================= app state =================
+const saved = store.get("profile") || {};
+const app = {
+  team: saved.team || null, nick: saved.nick || "",
+  build: saved.build || { name: E.NAMES[Math.floor(rng() * E.NAMES.length)], feat: "lucky", method: "buy", base: { ...E.START }, rolls: null, sel: null },
+  cid: store.get("cid") || (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(16).slice(2)),
+  code: null, ws: null, view: null, S: null, myIdx: -1, unlocked: { team: true },
+  queue: [], draining: false, animating: false, retry: 0, history: [], hIdx: -1, offset: 0, sentRoll: false, luckyShown: false,
+};
+store.set("cid", app.cid);
+const urlCode = (new URLSearchParams(location.search).get("room") || "").toUpperCase().replace(/^ARC-/, "");
+if (CODE_RE.test(urlCode)) app.code = urlCode;
+
+// ================= navigation =================
+const SCREENS = ["team", "build", "lobby", "match"];
+let screen = "team";
+function show(name) {
+  screen = name;
+  SCREENS.forEach((s) => ($("scr-" + s).hidden = s !== name));
+  document.querySelectorAll("#steps button").forEach((b) => {
+    const s = b.dataset.go;
+    b.disabled = !app.unlocked[s];
+    if (s === name) b.setAttribute("aria-current", "step"); else b.removeAttribute("aria-current");
+  });
+  window.scrollTo(0, 0);
+}
+$("steps").addEventListener("click", (e) => { const b = e.target.closest("button[data-go]"); if (b && !b.disabled) show(b.dataset.go); });
+
+// ================= step 1 =================
+if (app.code) { $("joinNote").hidden = false; $("joinNote").innerHTML = `You're joining room <b>ARC-${app.code}</b>. Make your robot, then you'll go straight to the lobby.`; }
+if (app.team) $("teamNum").value = app.team;
+$("teamNick").value = app.nick;
+function submitTeam() {
+  let team;
+  try { team = E.cleanTeam($("teamNum").value); } catch (e) { $("teamErr").textContent = e; return; }
+  $("teamErr").textContent = "";
+  app.team = team; app.nick = $("teamNick").value.trim().slice(0, 30);
+  app.unlocked.build = true;
+  renderBuild(); show("build");
+}
+$("toBuild").addEventListener("click", submitTeam);
+["teamNum", "teamNick"].forEach((id) => $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") submitTeam(); }));
+
+// ================= step 2 =================
+$("feats").innerHTML = Object.entries(E.FEATS).map(([k, f]) =>
+  `<label class="choice"><span><input type="radio" name="feat" value="${k}"><b>${f.name}</b></span><span>${f.desc}</span></label>`).join("");
+
+function sheetHTML(team, nick, b, al) {
+  const d = E.derived(b), f = E.FEATS[b.feat];
+  return `<div class="sheet s${al || "R"}">
+    <div><div class="nm">"${esc(b.name || "Unnamed")}"</div>
+    <div class="sub">Team ${esc(team)}${nick ? " · " + esc(nick) : ""}</div>
+    <div class="sub">Level 1 Robot · Alignment: Gracious Professional</div></div>
+    <div class="abil">${E.KEYS.map((k) => `<div class="ab"><div class="k">${k}</div><div class="m">${sgn(d.m[k])}</div><div class="s">${d.f[k]}</div></div>`).join("")}</div>
+    <table>
+      <tr><td class="k">Speed</td><td>${d.sq} squares per turn</td></tr>
+      <tr><td class="k">Feat</td><td><b>${f.name}.</b> ${f.desc}</td></tr>
+      <tr><td class="k">Dice</td><td>Natural 20: bonus action. Natural 1: lose your next turn.</td></tr>
+      <tr><td class="k">Gear</td><td>1 preloaded power cube, 1 set of bumpers (${al === "B" ? "blue" : "red"})</td></tr>
+    </table></div>`;
+}
+
+function renderBuild() {
+  const b = app.build;
+  $("botName").value = b.name;
+  document.querySelector(`input[name=feat][value=${b.feat}]`).checked = true;
+  document.querySelector(`input[name=method][value=${b.method}]`).checked = true;
+  $("reroll").hidden = b.method !== "roll";
+  $("toLobby").textContent = app.view ? "Back to the lobby >>" : app.code ? `Join room ARC-${app.code} >>` : "Create a room >>";
+  const left = E.BUDGET - E.spent(b.base);
+  $("methodNote").innerHTML = b.method === "buy"
+    ? `Scores start at 8 and go up to 15. Points left: <span class="pool">${left}</span> of ${E.BUDGET}. Modifier = (score − 10) ÷ 2, rounded down.`
+    : `Each score is 4d6 with the lowest die dropped. <b>Click two rows to swap their scores.</b> Modifier = (score − 10) ÷ 2, rounded down.`;
+  const d = E.derived(b);
+  let h = `<tr><th>ABILITY</th><th>${b.method === "buy" ? "BUY" : "DICE"}</th><th>SCORE</th><th>MOD</th></tr>`;
+  E.STATS.forEach(([k, name, what]) => {
+    const s = b.base[k];
+    let ctl;
+    if (b.method === "buy") {
+      const next = E.COST[s + 1];
+      ctl = `<span class="pm"><button type="button" data-pm="${k}:-1" aria-label="Lower ${name}" ${s <= 8 ? "disabled" : ""}>−</button><button type="button" data-pm="${k}:1" aria-label="Raise ${name}" ${s >= 15 || next - E.COST[s] > left ? "disabled" : ""}>+</button></span>`;
+    } else {
+      const r = b.rolls && b.rolls[k];
+      ctl = r ? `<span class="dice">${r.dice.map((v, i) => `<i class="${i === r.drop ? "drop" : ""}">${v}</i>`).join("")}</span>` : "";
+    }
+    h += `<tr class="${b.method === "roll" ? "swap" : ""} ${b.sel === k ? "sel" : ""}" data-k="${k}">
+      <td><b>${k}</b> ${name}<br><small>${what}</small></td><td>${ctl}</td><td class="n">${s}</td><td class="n">${sgn(d.m[k])}</td></tr>`;
+  });
+  $("stats").innerHTML = h;
+  $("buildSheet").innerHTML = sheetHTML(app.team, app.nick, b, myPlayer() ? myPlayer().al : "R");
+}
+
+function rollAll() {
+  const b = app.build; b.rolls = {};
+  E.KEYS.forEach((k) => {
+    const dice = [E.roll(6, rng), E.roll(6, rng), E.roll(6, rng), E.roll(6, rng)];
+    const drop = dice.indexOf(Math.min(...dice));
+    b.rolls[k] = { dice, drop };
+    b.base[k] = dice.reduce((a, v) => a + v, 0) - dice[drop];
+  });
+  b.sel = null;
+}
+$("stats").addEventListener("click", (e) => {
+  const b = app.build, pm = e.target.closest("[data-pm]");
+  if (pm) {
+    const [k, dlt] = pm.dataset.pm.split(":"), nv = b.base[k] + +dlt;
+    if (nv >= 8 && nv <= 15 && E.spent({ ...b.base, [k]: nv }) <= E.BUDGET) b.base[k] = nv;
+    renderBuild(); return;
+  }
+  const tr = e.target.closest("tr[data-k]");
+  if (tr && b.method === "roll") {
+    const k = tr.dataset.k;
+    if (!b.sel) b.sel = k;
+    else if (b.sel === k) b.sel = null;
+    else {
+      const a = b.sel;
+      [b.base[a], b.base[k]] = [b.base[k], b.base[a]];
+      [b.rolls[a], b.rolls[k]] = [b.rolls[k], b.rolls[a]];
+      b.sel = null;
+    }
+    renderBuild();
+  }
+});
+document.addEventListener("change", (e) => {
+  const b = app.build, t = e.target;
+  if (t.name === "feat") b.feat = t.value;
+  else if (t.name === "method") {
+    b.method = t.value;
+    if (b.method === "roll") rollAll(); else { b.base = { ...E.START }; b.rolls = null; b.sel = null; }
+  } else return;
+  renderBuild();
+});
+$("reroll").addEventListener("click", () => { rollAll(); renderBuild(); });
+$("botName").addEventListener("input", (e) => { app.build.name = e.target.value; $("buildSheet").innerHTML = sheetHTML(app.team, app.nick, app.build, myPlayer() ? myPlayer().al : "R"); });
+$("randName").addEventListener("click", () => { const n = E.NAMES.filter((x) => x !== app.build.name); app.build.name = n[Math.floor(rng() * n.length)]; renderBuild(); });
+$("toLobby").addEventListener("click", () => {
+  if (!app.build.name.trim()) app.build.name = "Unnamed";
+  store.set("profile", { team: app.team, nick: app.nick, build: app.build });
+  if (!app.code) {
+    const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    app.code = Array.from({ length: 4 }, () => A[Math.floor(rng() * A.length)]).join("");
+  }
+  history.replaceState(null, "", "?room=" + app.code);
+  app.unlocked.lobby = true;
+  if (app.ws && app.ws.readyState === 1) hello(); else connect();
+  renderLobby(); show("lobby");
+});
+
+// ================= connection =================
+function connect() {
+  clearTimeout(app.retryTimer);
+  const ws = new WebSocket(`${SERVER}/rooms/${app.code}/ws`);
+  app.ws = ws;
+  setConn("connecting…", false);
+  ws.onopen = () => { app.retry = 0; setConn("connected", true); hello(); };
+  ws.onmessage = (e) => { let m; try { m = JSON.parse(e.data); } catch { return; } onMessage(m); };
+  ws.onclose = () => {
+    if (app.ws !== ws) return;
+    setConn("reconnecting…", false);
+    app.retry = Math.min(app.retry + 1, 6);
+    app.retryTimer = setTimeout(connect, 600 * app.retry);
+  };
+}
+function send(obj) {
+  if (app.ws && app.ws.readyState === 1) { app.ws.send(JSON.stringify(obj)); return true; }
+  flashErr("Not connected yet. Trying again…"); return false;
+}
+function hello() { send({ type: "hello", cid: app.cid, team: app.team, nick: app.nick, build: { name: app.build.name, feat: app.build.feat, method: app.build.method, base: app.build.base } }); }
+function setConn(text, ok) { $("conn").textContent = text; $("conn").className = "conn" + (ok ? "" : " off"); }
+function flashErr(msg) {
+  if (screen === "match") $("odds").innerHTML = `<span class="warn">${esc(msg)}</span>`;
+  else { $("lobbyErr").textContent = msg; clearTimeout(flashErr.t); flashErr.t = setTimeout(() => ($("lobbyErr").textContent = ""), 5000); }
+}
+
+function onMessage(m) {
+  if (m.type === "error") { app.sentRoll = false; flashErr(m.msg); renderMatchControls(); return; }
+  if (m.type !== "state") return;
+  if (m.full) { $("log").innerHTML = ""; (m.log || []).forEach((l) => addLog(l.html, l.cls)); }
+  app.queue.push(m);
+  drain();
+}
+
+// Events play out in order (the die tumbles before its result is logged); then the new state shows.
+async function drain() {
+  if (app.draining) return;
+  app.draining = true;
+  while (app.queue.length) {
+    const m = app.queue.shift();
+    const popups = [];
+    for (const ev of m.events || []) {
+      if (ev.t === "log") addLog(ev.html, ev.cls);
+      else if (ev.t === "die") await animateDie(ev);
+      else if (ev.t === "popup") popups.push(ev);
+    }
+    applyView(m.room);
+    for (const p of popups) await natPopup(p);
+  }
+  app.draining = false;
+  renderMatchControls();
+}
+
+function applyView(view) {
+  const hadMatch = !!(app.S);
+  app.view = view; app.S = view.match; app.offset = view.now - Date.now(); app.sentRoll = false;
+  const me = myPlayer();
+  app.myIdx = app.S && me ? app.S.robots.findIndex((r) => r.al === me.al) : -1;
+  if (app.S) app.unlocked.match = true;
+  if (app.S && !hadMatch) { $("results").hidden = true; show("match"); }
+  if (!app.S && hadMatch && screen === "match") show("lobby");
+  renderLobby();
+  if (app.S) renderMatch();
+}
+const myPlayer = () => app.view && app.view.players.find((p) => p.me);
+
+// ================= step 3: lobby =================
+function slotHTML(al) {
+  const v = app.view, p = v && v.players.find((x) => x.al === al), me = myPlayer();
+  const head = `<h3 class="h${al}">${al === "R" ? "RED" : "BLUE"} ALLIANCE</h3>`;
+  if (!p) {
+    return head + `<div class="waiting"><b>Waiting for a friend…</b><span class="note">Send them the invite link above.</span>
+      <div class="row" style="justify-content:center"><button type="button" data-act="bot">Fill with a bot instead</button></div></div>`;
+  }
+  const status = `<span class="ready ${p.ready ? "yes" : "no"}">${p.ready ? "READY" : "NOT READY"}</span>`;
+  if (p.me) {
+    return head + sheetHTML(p.team, p.nick, p.build, al) +
+      `<div class="row">${status}<button type="button" data-act="ready">${p.ready ? "Unready" : "I'm ready"}</button>
+       <button type="button" data-act="edit">Edit robot</button><button type="button" data-act="leave">Leave room</button></div>`;
+  }
+  const who = p.bot ? "Bot" : `<span class="dot ${p.online ? "" : "off"}"></span>${p.online ? "Online" : "Offline"}`;
+  const kick = p.bot || (me && me.host) ? `<button type="button" data-act="kick">Remove</button>` : "";
+  return head + sheetHTML(p.team, p.nick, p.build, al) + `<div class="row">${status}<span class="note">${who}</span>${kick}</div>`;
+}
+
+function renderLobby() {
+  const v = app.view;
+  $("roomCode").textContent = "ARC-" + (app.code || "----");
+  $("inviteLink").value = location.origin + location.pathname + "?room=" + (app.code || "");
+  if (!v) { $("slotR").innerHTML = ""; $("slotB").innerHTML = ""; $("startMatch").disabled = true; $("startNote").textContent = "Connecting to the room…"; return; }
+  const me = myPlayer();
+  $("slotR").innerHTML = slotHTML("R");
+  $("slotB").innerHTML = slotHTML("B");
+  $("timerSel").value = String(v.timer);
+  $("timerSel").disabled = !me || !me.host || !!v.match;
+  const two = v.players.length === 2, ready = two && v.players.every((p) => p.ready);
+  $("startMatch").disabled = !me || !ready || !!v.match;
+  $("startMatch").textContent = v.match ? "MATCH IN PROGRESS" : "START MATCH";
+  $("startNote").textContent = !me ? "You're not in this room. It may be full." : v.match ? "" : !two ? "Needs an opponent." : !me.ready ? "Click I'm ready." : !ready ? "Waiting for your opponent to ready up." : "Everyone is ready.";
+  const chat = $("chat");
+  chat.innerHTML = v.chat.map((c) => c.sys ? `<div class="sys">*** ${esc(c.text)}</div>` : `<div><b class="${c.al}">&lt;${esc(c.who)}&gt;</b> ${esc(c.text)}</div>`).join("");
+  chat.scrollTop = chat.scrollHeight;
+}
+
+$("scr-lobby").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const act = b.dataset.act, me = myPlayer();
+  if (act === "ready") send({ type: "ready", v: !(me && me.ready) });
+  else if (act === "bot") send({ type: "bot" });
+  else if (act === "kick") send({ type: "kick" });
+  else if (act === "edit") { renderBuild(); show("build"); }
+  else if (act === "leave") {
+    send({ type: "leave" });
+    const ws = app.ws; app.ws = null; if (ws) ws.close();
+    app.code = null; app.view = null; app.S = null; app.unlocked.lobby = app.unlocked.match = false;
+    history.replaceState(null, "", location.pathname);
+    $("joinNote").hidden = true; renderBuild(); show("build");
+  }
+});
+$("swapSides").addEventListener("click", () => send({ type: "swap" }));
+$("timerSel").addEventListener("change", (e) => send({ type: "timer", v: +e.target.value }));
+$("startMatch").addEventListener("click", () => send({ type: "start" }));
+$("copyLink").addEventListener("click", () => {
+  const link = $("inviteLink").value;
+  const fallback = () => { $("inviteLink").select(); $("copyMsg").textContent = "Selected. Press Ctrl+C to copy."; };
+  try { navigator.clipboard.writeText(link).then(() => ($("copyMsg").textContent = "Copied!"), fallback); } catch { fallback(); }
+});
+function sendChat() { const v = $("chatIn").value.trim(); if (v && send({ type: "chat", text: v })) $("chatIn").value = ""; }
+$("chatSend").addEventListener("click", sendChat);
+$("chatIn").addEventListener("keydown", (e) => { if (e.key === "Enter") sendChat(); });
+
+// ================= step 4: match =================
+const S = () => app.S;
+const myTurn = () => { const s = S(); return !!s && s.phase === "play" && E.curIdx(s) === app.myIdx && !s.pending && !app.animating && !popup.close && !app.draining; };
+
+function addLog(html, cls) {
+  const el = $("log"), d = document.createElement("div");
+  if (cls) d.className = cls; d.innerHTML = html; el.appendChild(d); el.scrollTop = el.scrollHeight;
+}
+
+function animateDie(ev) {
+  return new Promise((resolve) => {
+    const die = $("die"), n = $("dieN");
+    $("dieBtn").disabled = true;
+    $("dWhat").innerHTML = ev.what; $("dMath").textContent = ""; $("dRes").textContent = ""; $("dRes").className = "res";
+    app.animating = true;
+    const land = () => {
+      n.textContent = ev.nat; die.setAttribute("class", ev.cls); $("dMath").textContent = ev.math;
+      $("dRes").textContent = ev.res; $("dRes").className = "res " + ev.cls;
+      app.animating = false; resolve();
+    };
+    if (reduced) { land(); return; }
+    die.setAttribute("class", "");
+    void die.getBoundingClientRect();
+    die.setAttribute("class", "spin");
+    let k = 0;
+    const iv = setInterval(() => { n.textContent = E.roll(20, rng); if (++k >= 8) { clearInterval(iv); land(); } }, 55);
+  });
+}
+
+function natPopup(ev) {
+  return new Promise((resolve) => {
+    const s = S(), r = s.robots[ev.idx], mine = ev.idx === app.myIdx, what = ev.noun.toLowerCase(), team = `Team ${esc(r.t)}`;
+    if (ev.kind === "nat20") popup({ icon: "20", title: "Natural 20!", buttons: [{ label: "Awesome" }], then: resolve,
+      html: mine ? `You rolled a natural 20 on ${what}!<br><b>You get a bonus action this turn.</b>` : `${team} rolled a natural 20 on ${what}.<br><b>They get a bonus action this turn.</b>` });
+    else popup({ icon: "1", title: "Natural 1!", buttons: [{ label: "Ouch" }], then: resolve,
+      html: mine ? `You rolled a natural 1 on ${what}.<br><b>You lose your next turn.</b>` : `${team} rolled a natural 1 on ${what}.<br><b>They lose their next turn.</b>` });
+  });
+}
+
+function popup(o) {
+  const m = $("modal"), btns = o.buttons && o.buttons.length ? o.buttons : [{ label: "OK" }];
+  $("modalTitle").textContent = o.title; $("modalIcon").textContent = o.icon || "!"; $("modalBody").innerHTML = o.html;
+  $("modalBtns").innerHTML = btns.map((b, i) => `<button type="button" data-i="${i}">${esc(b.label)}</button>`).join("");
+  popup.close = (i) => {
+    m.hidden = true; popup.close = null;
+    const b = btns[i]; if (b && b.fn) b.fn();
+    if (o.then) o.then();
+    renderMatchControls();
+  };
+  popup.cancel = btns.length - 1;
+  m.hidden = false;
+  $("modalBtns").querySelector("button").focus();
+}
+$("modalBtns").addEventListener("click", (e) => { const b = e.target.closest("button[data-i]"); if (b && popup.close) popup.close(+b.dataset.i); });
+$("modalX").addEventListener("click", () => popup.close && popup.close(popup.cancel));
+document.addEventListener("keydown", (e) => { if (e.key === "Escape" && popup.close) popup.close(popup.cancel); });
+
+function cellHTML(s, c, reach) {
+  const t = E.TYPE[c] || "", r = s.robots.find((x) => x.at === c), cls = ["cell"], x = E.ci(c);
+  if (x <= 1 || t === "platR" || t === "exR") cls.push("zR");
+  if (x >= 9 || t === "platB" || t === "exB") cls.push("zB");
+  if (x === 2) cls.push("line"); if (x === 8) cls.push("lineB");
+  if (t === "fence") cls.push("fence");
+  if (t === "tower") cls.push("tower");
+  if (t.startsWith("plat")) cls.push("plat");
+  if (reach && !r) cls.push("reach");
+  if (!t && !s.floor[c]) cls.push("empty");
+  let inner = "";
+  const p = s.plates[c];
+  if (t === "swplate") inner = `<div class="plate ${p.c}"><small>SWITCH</small><b>${p.n}</b></div>`;
+  else if (t === "tower") inner = `<span class="tag">TOWER</span>`;
+  else if (t === "null" && !r) inner = `<div class="plate ${p.c}"><small>SCALE</small><b>${p.n}</b></div>`;
+  else if (r) {
+    const now = s.phase === "play" && r === E.cur(s);
+    inner = `<div class="bot ${r.al}${now ? " now" : ""}" title="${esc(r.name)}">${esc(r.t)}${r.cube ? '<span class="cube"></span>' : ""}</div>`;
+    if (t === "null") inner += `<span class="badge ${p.c}">${p.n}</span>`;
+  } else if (s.floor[c]) inner = `<div class="cubes">${s.floor[c] > 4 ? '<span class="cube"></span>×' + s.floor[c] : '<span class="cube"></span>'.repeat(s.floor[c])}</div>`;
+  else if (t === "exR" || t === "exB") inner = `<span class="tag ${t.slice(2)}">EXCH</span>`;
+  else if (t === "portalR" || t === "portalB") inner = `<span class="tag ${t.slice(-1)}">PORTAL</span>`;
+  const names = { fence: "switch fence (blocked)", tower: "scale tower (blocked)", swplate: "switch plate", null: "null territory under a scale plate", platR: "red platform zone", platB: "blue platform zone", plat: "platform", exR: "red exchange", exB: "blue exchange", portalR: "red portal", portalB: "blue portal" };
+  const title = c + (names[t] ? " · " + names[t] : "") + (s.floor[c] ? ` · ${s.floor[c]} cube${s.floor[c] > 1 ? "s" : ""}` : "") + (reach && !r ? ` · ${reach} square${reach > 1 ? "s" : ""} away` : "");
+  return `<div class="${cls.join(" ")}" data-cell="${c}" title="${title}">${inner}</div>`;
+}
+
+function renderMatch() {
+  const s = S(); if (!s) return;
+  const v = app.view, me = s.robots[app.myIdx], op = s.robots[1 - app.myIdx];
+  $("fieldLegend").textContent = `Field · ARC-${v.code} · Team ${s.robots[0].t} vs Team ${s.robots[1].t}`;
+  const reach = myTurn() && s.moveLeft > 0 ? E.reachable(s, E.cur(s)) : {};
+  let h = `<div class="lbl"></div>` + E.COLS.split("").map((c) => `<div class="lbl">${c}</div>`).join("");
+  for (let y = 1; y <= 7; y++) {
+    h += `<div class="lbl">${y}</div>`;
+    for (let x = 0; x < 11; x++) h += cellHTML(s, E.cellId(x, y), reach[E.cellId(x, y)]);
+  }
+  $("grid").innerHTML = h;
+
+  $("sR").textContent = s.score.R; $("sB").textContent = s.score.B;
+  const secs = s.round === 1 ? 15 : Math.max(0, (16 - s.round) * 10 - 10);
+  $("clock").textContent = `ROUND ${s.round}/${E.ROUNDS} · ${s.phase === "over" ? "FINAL" : E.phaseName(s)}${s.round > 1 && s.phase !== "over" ? " · ~" + Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0") + " left" : ""}`;
+  const o = E.owners(s), who = (x) => (x === "R" ? '<b class="r R">RED</b>' : x === "B" ? '<b class="b B">BLUE</b>' : "nobody");
+  $("own").innerHTML = `Red switch: ${who(o.R ? "R" : null)} · Blue switch: ${who(o.B ? "B" : null)}<br>Scale: ${who(o.scale)} · +${s.round === 1 ? 20 : 10}/round each`;
+  const rolled = s.phase !== "init";
+  $("order").innerHTML = (rolled ? s.orderIdx : [0, 1]).map((i, k) => {
+    const r = s.robots[i], c = !rolled ? "" : s.done[i] ? "done" : k === s.turn && s.phase === "play" ? "now" : "";
+    return `<li class="${c}"><span class="${r.al}">${esc(r.t)} "${esc(r.name)}"</span> (${s.init[i] == null ? "?" : Math.floor(s.init[i])})${i === app.myIdx ? " · you" : r.bot ? " · bot" : ""}${c === "now" ? " &lt;&lt;" : ""}</li>`;
+  }).join("");
+  const players = v.players;
+  $("robots").innerHTML = s.robots.map((r, i) => {
+    const pl = players.find((p) => p.al === r.al), off = pl && !pl.bot && !pl.online ? " · <b>offline</b>" : "";
+    return `<tr><td class="k"><span class="${r.al}">${esc(r.t)}</span></td><td>"${esc(r.name)}"${i === app.myIdx ? " (you)" : ""}${off}<br>SPD ${sgn(r.m.SPD)} INT ${sgn(r.m.INT)} ACC ${sgn(r.m.ACC)} CLB ${sgn(r.m.CLB)} · ${r.sq} sq<br>Feat: ${E.FEATS[r.feat].name}${r.feat === "lucky" ? ` (${r.luck} token${r.luck === 1 ? "" : "s"})` : ""}<br>${r.at} · ${r.cube ? "holding a cube" : "empty"}${r.skip ? " · <b>LOSES NEXT TURN</b>" : ""}${r.climbed ? " · CLIMBED" : ""}</td></tr>`;
+  }).join("");
+  const vt = (al, k) => s.vault[al][k] + "/3" + (s.used[al][k] ? " ✓" : "");
+  $("vault").innerHTML = `<tr><td class="k"></td><td><b class="R">RED</b></td><td><b class="B">BLUE</b></td></tr>` +
+    ["force", "boost", "levitate"].map((k) => `<tr><td class="k">${k.toUpperCase()}</td><td>${vt("R", k)}</td><td>${vt("B", k)}</td></tr>`).join("");
+  const a = s.active, q = s.queue.map((x) => `${E.ALN[x.al]} ${x.type} ${x.lvl}`).join(", ");
+  $("pu").textContent = `Active: ${a ? E.ALN[a.al] + " " + a.type.toUpperCase() + " " + a.lvl : "none"}${q ? " · Queued: " + q : ""} · ✓ = played. One vault action per alliance per round.`;
+
+  if (s.phase === "over" && s.result) {
+    const w = s.result.w;
+    $("results").hidden = false; $("results").className = "results";
+    $("results").innerHTML = `<div class="w ${w || ""}">${w ? (w === me.al ? "Victory!" : "Defeat.") : "A tie!"} RED ${s.score.R} – BLUE ${s.score.B}</div>
+      <div>Ranking points: <b class="R">RED ${s.result.rp.R}</b> · <b class="B">BLUE ${s.result.rp.B}</b> <span class="note">(win 2, tie 1, face the boss 1, auto quest 1)</span></div>
+      <div class="row"><button type="button" id="rematch">Rematch</button><button type="button" id="backLobby">Back to lobby</button></div>`;
+    $("rematch").onclick = () => send({ type: "rematch" });
+    $("backLobby").onclick = () => send({ type: "lobby" });
+  } else $("results").hidden = true;
+  renderMatchControls();
+}
+
+function dieArmed() {
+  const s = S();
+  if (!s || app.sentRoll || app.animating || app.draining || popup.close) return null;
+  if (s.phase === "init" && s.init[app.myIdx] == null) return "initiative";
+  if (s.phase === "play" && s.pending && s.pending.kind === "check" && s.pending.idx === app.myIdx) return "roll";
+  return null;
+}
+
+function renderMatchControls() {
+  const s = S(); if (!s) return;
+  const armed = dieArmed(), r = s.phase === "play" ? E.cur(s) : null, me = s.robots[app.myIdx];
+  $("dieBtn").disabled = !armed;
+  if (armed) {
+    $("dieN").textContent = "?"; $("die").setAttribute("class", "ready");
+    if (armed === "initiative") { $("dWhat").innerHTML = `Roll for initiative! d20 ${sgn(me.m.SPD)} SPD. The higher roll goes first every round.`; }
+    else { const p = s.pending; $("dWhat").innerHTML = `${p.noun}: need ${p.dc} on d20 ${sgn(p.m)}`; }
+    $("dMath").textContent = "Click the die to roll!"; $("dRes").textContent = ""; $("dRes").className = "res";
+  }
+  // Lucky reroll choice
+  if (s.pending && s.pending.kind === "lucky" && s.pending.idx === app.myIdx && !popup.close && !app.draining && !app.luckyShown) {
+    app.luckyShown = true;
+    const p = s.pending, x = p.x;
+    popup({ icon: "?", title: "Lucky!", html: `You rolled ${x.nat} ${sgn(p.m)} = ${x.total} and needed ${p.dc}.<br>Spend 1 of your <b>${me.luck} Lucky token${me.luck > 1 ? "s" : ""}</b> to reroll?`,
+      buttons: [{ label: "Reroll", fn: () => send({ type: "lucky", use: true }) }, { label: "Keep it", fn: () => send({ type: "lucky", use: false }) }] });
+  }
+  if (!(s.pending && s.pending.kind === "lucky")) app.luckyShown = false;
+
+  const b = $("banner");
+  const tleft = app.view.deadline ? Math.max(0, Math.ceil((app.view.deadline - (Date.now() + app.offset)) / 1000)) : null;
+  const t = tleft != null ? `<span class="timer ${tleft <= 10 ? "low" : ""}">⏱ ${tleft}s</span>` : "";
+  if (s.phase === "over") { b.className = "banner"; b.innerHTML = "<span>*** MATCH OVER ***</span>"; }
+  else if (s.phase === "init") { b.className = "banner"; b.innerHTML = `<span>&gt;&gt;&gt; ${s.init[app.myIdx] == null ? "ROLL FOR INITIATIVE: CLICK THE DIE" : "Waiting for your opponent to roll initiative…"} &lt;&lt;&lt;</span>${t}`; }
+  else if (E.curIdx(s) === app.myIdx) {
+    b.className = "banner " + r.al;
+    b.innerHTML = s.pending
+      ? `<span>&gt;&gt;&gt; ${s.pending.kind === "lucky" ? "LUCKY? REROLL OR KEEP IT" : "CLICK THE DIE TO ROLL"} &lt;&lt;&lt;</span>${t}`
+      : `<span>&gt;&gt;&gt; YOUR TURN · TEAM ${esc(r.t)} "${esc(r.name)}"</span><span>[move ${s.moveLeft}/${r.sq} left] [action ${s.acted ? "USED" : "ready"}]${s.extra ? ` [bonus action x${s.extra}]` : ""}${r.feat === "intake" && !s.ibUsed ? " [bonus intake ready]" : ""}</span>${t}`;
+  } else {
+    b.className = "banner " + r.al;
+    b.innerHTML = `<span>${E.ALN[r.al]}: TEAM ${esc(r.t)} "${esc(r.name)}" ${r.bot ? "IS THINKING…" : "IS TAKING THEIR TURN…"}</span>${t}`;
+  }
+  $("prompt").textContent = (me ? me.t : "") + ">";
+  const mt = myTurn();
+  $("cmd").disabled = !mt; $("go").disabled = !mt;
+  preview();
+}
+setInterval(() => { if (app.S && app.view && app.view.deadline && screen === "match") renderMatchControls(); }, 1000);
+
+// ---------- input ----------
+const input = $("cmd");
+const toks = () => input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+function preview() {
+  const o = $("odds"), s = S();
+  if (!s) { o.textContent = ""; return; }
+  if (s.phase === "over") { o.textContent = "Match over."; return; }
+  if (popup.close) { o.textContent = "Read the pop-up to continue."; return; }
+  if (dieArmed()) { o.textContent = "Click the die to roll!"; return; }
+  if (!myTurn()) { o.textContent = app.animating ? "Rolling…" : s.phase === "init" ? "Waiting for initiative…" : "Opponent's turn. Watch the die."; return; }
+  const p = E.plan(s, app.myIdx, toks());
+  if (!p) { o.textContent = `Your move, Team ${E.cur(s).t}. Type a command or click a yellow square.`; return; }
+  if (p.err) { o.innerHTML = `<span class="warn">${esc(p.err)}</span>`; return; }
+  let t = `Will ${esc(p.label)}.`;
+  const r = E.cur(s);
+  if (p.dc) t += ` Need ${p.dc} on d20 ${sgn(p.m)} → <span class="good">${E.pct(p.dc, p.m, p.adv)}%</span>${r.feat === "lucky" && r.luck ? ` (+${r.luck} Lucky reroll${r.luck > 1 ? "s" : ""})` : ""}`;
+  o.innerHTML = t + " Press Enter.";
+}
+function submit() {
+  if (!myTurn()) return;
+  const text = input.value.trim(); if (!text) return;
+  app.history.unshift(text); app.hIdx = -1;
+  const p = E.plan(S(), app.myIdx, toks());
+  if (p && p.kind === "help") { E.HELP.forEach((l, i) => addLog(esc(l), i === 0 ? "rnd" : "")); input.value = ""; preview(); return; }
+  if (p && p.err) { addLog(`<b class="${E.cur(S()).al}">${esc(E.cur(S()).t)}&gt;</b> ${esc(text)}`); addLog("  " + esc(p.err)); input.value = ""; preview(); return; }
+  if (send({ type: "cmd", text })) input.value = "";
+}
+input.addEventListener("input", preview);
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); submit(); }
+  else if (e.key === "ArrowUp" && app.history.length) { e.preventDefault(); app.hIdx = Math.min(app.hIdx + 1, app.history.length - 1); input.value = app.history[app.hIdx]; preview(); }
+  else if (e.key === "ArrowDown") { e.preventDefault(); app.hIdx = Math.max(app.hIdx - 1, -1); input.value = app.hIdx < 0 ? "" : app.history[app.hIdx]; preview(); }
+});
+$("go").addEventListener("click", submit);
+$("quick").addEventListener("click", (e) => { const b = e.target.closest("button"); if (!b || !myTurn()) return; input.value = b.dataset.fill; input.focus(); preview(); });
+$("grid").addEventListener("click", (e) => { const el = e.target.closest(".cell.reach"); if (!el || !myTurn()) return; input.value = "m " + el.dataset.cell.toLowerCase(); submit(); });
+$("dieBtn").addEventListener("click", () => {
+  const armed = dieArmed(); if (!armed) return;
+  if (send({ type: armed })) { app.sentRoll = true; $("dieBtn").disabled = true; }
+});
+
+// ================= start =================
+// Coming back to a room link with a saved robot drops you straight back into the room.
+if (app.code && app.team && saved.build) {
+  app.unlocked.build = true; app.unlocked.lobby = true;
+  renderBuild(); connect(); renderLobby(); show("lobby");
+} else show("team");
+</script>
+</body>
+</html>
