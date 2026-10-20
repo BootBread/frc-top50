@@ -854,14 +854,6 @@ function renderMatch() {
   const s = S(); if (!s) return;
   const v = app.view, me = s.robots[app.myIdx], op = s.robots[1 - app.myIdx];
   $("fieldLegend").textContent = `Field · ARC-${v.code} · Team ${s.robots[0].t} vs Team ${s.robots[1].t}`;
-  const reach = myTurn() && s.moveLeft > 0 ? E.reachable(s, E.cur(s)) : {};
-  let h = `<div class="lbl"></div>` + E.COLS.split("").map((c) => `<div class="lbl">${c}</div>`).join("");
-  for (let y = 1; y <= 7; y++) {
-    h += `<div class="lbl">${y}</div>`;
-    for (let x = 0; x < 11; x++) h += cellHTML(s, E.cellId(x, y), reach[E.cellId(x, y)]);
-  }
-  $("grid").innerHTML = h;
-
   $("sR").textContent = s.score.R; $("sB").textContent = s.score.B;
   const secs = s.round === 1 ? 15 : Math.max(0, (16 - s.round) * 10 - 10);
   $("clock").textContent = `ROUND ${s.round}/${E.ROUNDS} · ${s.phase === "over" ? "FINAL" : E.phaseName(s)}${s.round > 1 && s.phase !== "over" ? " · ~" + Math.floor(secs / 60) + ":" + String(secs % 60).padStart(2, "0") + " left" : ""}`;
@@ -903,8 +895,22 @@ function dieArmed() {
   return null;
 }
 
+// The yellow squares depend on whether it's your turn right now (not mid-animation or behind a pop-up),
+// so the field is redrawn with the controls, and only touched when something on it changed.
+function renderField() {
+  const s = S(); if (!s) return;
+  const reach = myTurn() && s.moveLeft > 0 ? E.reachable(s, E.cur(s)) : {};
+  let h = `<div class="lbl"></div>` + E.COLS.split("").map((c) => `<div class="lbl">${c}</div>`).join("");
+  for (let y = 1; y <= 7; y++) {
+    h += `<div class="lbl">${y}</div>`;
+    for (let x = 0; x < 11; x++) h += cellHTML(s, E.cellId(x, y), reach[E.cellId(x, y)]);
+  }
+  if (h !== renderField.last) { $("grid").innerHTML = h; renderField.last = h; }
+}
+
 function renderMatchControls() {
   const s = S(); if (!s) return;
+  renderField();
   const armed = dieArmed(), r = s.phase === "play" ? E.cur(s) : null, me = s.robots[app.myIdx];
   $("dieBtn").disabled = !armed;
   if (armed) {
