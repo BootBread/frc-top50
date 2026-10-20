@@ -20,7 +20,7 @@ export const FEATS = {
   lucky:  { name: "Lucky",         desc: "3 luck tokens. When you fail a roll, spend one to reroll." },
   mobile: { name: "Mobile",        desc: "Move 1.5 times as far as everyone else (rounded down)." },
   intake: { name: "Intake Master", desc: "Intake as a bonus action, so you can still place, exchange or climb that turn." },
-  climb:  { name: "Climb Master",  desc: "A successful climb also scores 2 buddy climbs (+90 total)." },
+  climb:  { name: "Climb Master",  desc: "A successful climb also scores 1 buddy climb (+60 total)." },
 };
 export const DC = { intake: 10, portal: 8, exchange: 7, switch: 10, scale: 16, climb: 16 };
 export const NAMES = ["Sir Bumps-a-Lot", "The Forklift", "Cube Goblin", "Rung Raider", "Elevator Lich", "Brownout", "Lord of the Scale", "Gearbox Bard", "Plate Paladin", "Null Territory"];
@@ -240,7 +240,7 @@ export function plan(S, idx, tok) {
     if (r.climbed) return { err: `${r.t} already climbed.` };
     if (!PLAT[al].includes(r.at)) return { err: `Climb from your platform zone (${PLAT[al].join("/")}).` };
     return { kind: "check", noun: "Climb", dc: DC.climb, m: r.m.CLB, adv: false, action: { type: "climb", slot },
-      label: `climb the scale (FACE THE BOSS +${r.feat === "climb" ? 90 : 30})` };
+      label: `climb the scale (FACE THE BOSS +${r.feat === "climb" ? 60 : 30})` };
   }
   if (c === "play" || c === "vault") {
     if (phaseName(S) === "AUTO") return { err: "Power-ups can only be played in TELEOP." };
@@ -360,9 +360,9 @@ function finish(S, p, x, out) {
   } else if (a.type === "climb") {
     if (x.ok) {
       r.climbed = true;
-      const pts = r.feat === "climb" ? 90 : 30;
+      const pts = r.feat === "climb" ? 60 : 30;
       S.score[al] += pts;
-      log(out, `  Climb succeeded. ${tag(r)} is UP!${r.feat === "climb" ? " Climb Master brings 2 buddies along." : ""} +${pts} ${ALN[al]}.`);
+      log(out, `  Climb succeeded. ${tag(r)} is UP!${r.feat === "climb" ? " Climb Master brings a buddy along." : ""} +${pts} ${ALN[al]}.`);
     } else log(out, "  Climb failed. Slips off the bar.");
   }
   after(S, out);
