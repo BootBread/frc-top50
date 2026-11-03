@@ -1,0 +1,416 @@
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FRC TOP 50 - 2026 Midterm Election Night</title>
+<script src="https://cdn.jsdelivr.net/npm/topojson-client@3.1.0/dist/topojson-client.min.js"></script>
+<style>
+/* Same plain 1995 look as the rest of frctop50.com: browser defaults, tables, <hr>s. */
+body { max-width: 1100px; margin: 8px auto; padding: 0 8px; }
+.tape { border: 1px solid #000; overflow: hidden; height: 1.6em; position: relative; white-space: nowrap; }
+.track { position: absolute; top: 0; left: 0; height: 100%; display: flex; align-items: center; will-change: transform; }
+.tick { padding: 0 1.5em; text-decoration: none; color: #000; }
+a.tick { color: #0000EE; text-decoration: underline; }
+.up { color: #008000; } .dn { color: #CC0000; }
+#map { width: 100%; max-width: 800px; height: auto; display: block; margin: 0 auto; }
+#map .st { cursor: pointer; }
+#map .st:hover path { stroke-width: 2.5; }
+table { border-collapse: collapse; }
+.wide { width: 100%; max-width: 800px; }
+.scroll { overflow-x: auto; max-width: 100%; }
+tr.hl { background: #FFFF99; }
+td.nowrap { white-space: nowrap; }
+.sw { display: inline-block; width: 12px; height: 12px; border: 1px solid #000; vertical-align: -1px; }
+.D { color: #0000CC; } .R { color: #CC0000; } .I { color: #007700; }
+#news td { vertical-align: top; }
+</style>
+</head>
+<body bgcolor="#FFFFFF" text="#000000" link="#0000EE" vlink="#551A8B">
+<center>
+<h1>FRC TOP 50</h1>
+<b>The Definitive Ranking of FIRST Robotics Competition Teams</b>
+<p>
+<a href="../index.html">Home</a> |
+<a href="../methodology.html">Methodology</a> |
+<a href="../faq.html">FAQ</a> |
+<a href="../changelog.html">Changelog</a> |
+<a href="../arcade/">Arcade</a> |
+<a href="./">Midterms</a>
+</center>
+<hr>
+
+<center>
+<h2>2026 Midterm Election Night</h2>
+<i><span id="dateline">Election Night</span> &middot; <span id="clock">--:--</span> &middot; <span id="status">Loading odds...</span></i>
+<p>
+<font size="2">Chances come from election betting markets and update every 30 seconds. They are odds, <b>not vote counts</b>.</font>
+</center>
+
+<p><b>Market ticker:</b></p>
+<div class="tape" id="tapeA"><div class="track"></div></div>
+
+<hr>
+<center>
+<h3>Who Controls Congress?</h3>
+<div class="scroll"><table border="1" cellpadding="4" cellspacing="0" id="control"></table></div>
+<p>
+<b>Show map for:</b>
+<input type="radio" name="mode" id="mSen" value="sen" checked> <label for="mSen">Senate</label>
+<input type="radio" name="mode" id="mGov" value="gov"> <label for="mGov">Governors</label>
+</p>
+<h3 id="boardTitle">Senate Map</h3>
+<svg id="map" viewBox="0 0 990 620" role="img" aria-label="Map of the states colored by betting favorite">
+  <g id="states"></g>
+  <g id="labels"></g>
+</svg>
+<p><font size="2" id="legend"></font></p>
+<p id="seats"></p>
+</center>
+
+<hr>
+<center>
+<h3 id="tableTitle">All Senate Races</h3>
+<font size="2">Click a state on the map to find its row. Sorted closest race first.</font>
+<p>
+<div class="scroll"><table border="1" cellpadding="4" cellspacing="0" class="wide" id="races"></table></div>
+</center>
+
+<hr>
+<center>
+<h3>Latest News</h3>
+<div class="scroll"><table border="1" cellpadding="4" cellspacing="0" class="wide" id="news">
+<tr bgcolor="#C0C0C0"><th>Time (ET)</th><th>Headline</th><th>Source</th></tr>
+</table></div>
+</center>
+<p><b>News ticker:</b></p>
+<div class="tape" id="tapeB"><div class="track"></div></div>
+
+<hr>
+<center>
+<font size="2">
+Odds from election betting markets.
+News from Google News, NPR and PBS NewsHour. Map from the US Census via us-atlas.<br>
+"3-1" means the favorite wins about 3 times for every 1 time it loses.
+</font>
+</center>
+<script>
+const RACES = [{"k":"ctl","st":"H","ev":"CONTROLH-2026","m":["CONTROLH-2026-D","CONTROLH-2026-R"]},{"k":"ctl","st":"S","ev":"CONTROLS-2026","m":["CONTROLS-2026-D","CONTROLS-2026-R"]},{"k":"gov","st":"AK","ev":"KXGOVPARTYAK-26","m":["KXGOVPARTYAK-26-R","KXGOVPARTYAK-26-D"]},{"k":"gov","st":"AL","ev":"GOVPARTYAL-26","m":["GOVPARTYAL-26-D","GOVPARTYAL-26-R"]},{"k":"gov","st":"AR","ev":"GOVPARTYAR-26","m":["GOVPARTYAR-26-D","GOVPARTYAR-26-R"]},{"k":"gov","st":"AZ","ev":"GOVPARTYAZ-26","m":["GOVPARTYAZ-26-D","GOVPARTYAZ-26-R"]},{"k":"gov","st":"CA","ev":"GOVPARTYCA-26","m":["GOVPARTYCA-26-D","GOVPARTYCA-26-R"]},{"k":"gov","st":"CO","ev":"GOVPARTYCO-26","m":["GOVPARTYCO-26-D","GOVPARTYCO-26-R"]},{"k":"gov","st":"CT","ev":"GOVPARTYCT-26","m":["GOVPARTYCT-26-D","GOVPARTYCT-26-R"]},{"k":"gov","st":"FL","ev":"GOVPARTYFL-26","m":["GOVPARTYFL-26-D","GOVPARTYFL-26-R"]},{"k":"gov","st":"GA","ev":"GOVPARTYGA-26","m":["GOVPARTYGA-26-D","GOVPARTYGA-26-R"]},{"k":"gov","st":"HI","ev":"GOVPARTYHI-26","m":["GOVPARTYHI-26-D","GOVPARTYHI-26-R"]},{"k":"gov","st":"IA","ev":"GOVPARTYIA-26","m":["GOVPARTYIA-26-D","GOVPARTYIA-26-R"]},{"k":"gov","st":"ID","ev":"GOVPARTYID-26","m":["GOVPARTYID-26-D","GOVPARTYID-26-R"]},{"k":"gov","st":"IL","ev":"GOVPARTYIL-26","m":["GOVPARTYIL-26-D","GOVPARTYIL-26-R"]},{"k":"gov","st":"KS","ev":"GOVPARTYKS-27","m":["GOVPARTYKS-27-D","GOVPARTYKS-27-R"]},{"k":"gov","st":"MA","ev":"GOVPARTYMA-26","m":["GOVPARTYMA-26-D","GOVPARTYMA-26-R"]},{"k":"gov","st":"MD","ev":"GOVPARTYMD-26","m":["GOVPARTYMD-26-D","GOVPARTYMD-26-R"]},{"k":"gov","st":"ME","ev":"GOVPARTYME-26","m":["GOVPARTYME-26-D","GOVPARTYME-26-R","GOVPARTYME-26-RBEN"]},{"k":"gov","st":"MI","ev":"GOVPARTYMI-26","m":["GOVPARTYMI-26-D","GOVPARTYMI-26-R","GOVPARTYMI-26-MD"]},{"k":"gov","st":"MN","ev":"GOVPARTYMN-26","m":["GOVPARTYMN-26-D","GOVPARTYMN-26-R"]},{"k":"gov","st":"NE","ev":"GOVPARTYNE-26","m":["GOVPARTYNE-26-D","GOVPARTYNE-26-R"]},{"k":"gov","st":"NH","ev":"GOVPARTYNH-28","m":["GOVPARTYNH-28-D","GOVPARTYNH-28-R"]},{"k":"gov","st":"NM","ev":"GOVPARTYNM-26","m":["GOVPARTYNM-26-D","GOVPARTYNM-26-R"]},{"k":"gov","st":"NV","ev":"GOVPARTYNV-26","m":["GOVPARTYNV-26-D","GOVPARTYNV-26-R"]},{"k":"gov","st":"NY","ev":"GOVPARTYNY-26","m":["GOVPARTYNY-26-D","GOVPARTYNY-26-R"]},{"k":"gov","st":"OH","ev":"GOVPARTYOH-26","m":["GOVPARTYOH-26-D","GOVPARTYOH-26-R"]},{"k":"gov","st":"OK","ev":"GOVPARTYOK-26","m":["GOVPARTYOK-26-D","GOVPARTYOK-26-R"]},{"k":"gov","st":"OR","ev":"GOVPARTYOR-26","m":["GOVPARTYOR-26-D","GOVPARTYOR-26-R"]},{"k":"gov","st":"PA","ev":"GOVPARTYPA-26","m":["GOVPARTYPA-26-D","GOVPARTYPA-26-R"]},{"k":"gov","st":"RI","ev":"GOVPARTYRI-26","m":["GOVPARTYRI-26-D","GOVPARTYRI-26-R","GOVPARTYRI-26-KBLO"]},{"k":"gov","st":"SC","ev":"GOVPARTYSC-26","m":["GOVPARTYSC-26-D","GOVPARTYSC-26-R"]},{"k":"gov","st":"SD","ev":"GOVPARTYSD-26","m":["GOVPARTYSD-26-D","GOVPARTYSD-26-R"]},{"k":"gov","st":"TN","ev":"GOVPARTYTN-26","m":["GOVPARTYTN-26-D","GOVPARTYTN-26-R","GOVPARTYTN-26-DHAT"]},{"k":"gov","st":"TX","ev":"GOVPARTYTX-26","m":["GOVPARTYTX-26-D","GOVPARTYTX-26-R"]},{"k":"gov","st":"VT","ev":"GOVPARTYVT-26","m":["GOVPARTYVT-26-D","GOVPARTYVT-26-R"]},{"k":"gov","st":"WI","ev":"GOVPARTYWI-26","m":["GOVPARTYWI-26-D","GOVPARTYWI-26-R"]},{"k":"gov","st":"WY","ev":"GOVPARTYWY-26","m":["GOVPARTYWY-26-D","GOVPARTYWY-26-R"]},{"k":"sen","st":"AK","ev":"SENATEAK-26","m":["SENATEAK-26-R","SENATEAK-26-D"]},{"k":"sen","st":"AL","ev":"SENATEAL-26","m":["SENATEAL-26-R","SENATEAL-26-D"]},{"k":"sen","st":"AR","ev":"SENATEAR-26","m":["SENATEAR-26-R","SENATEAR-26-D"]},{"k":"sen","st":"CO","ev":"SENATECO-26","m":["SENATECO-26-R","SENATECO-26-D"]},{"k":"sen","st":"DE","ev":"SENATEDE-26","m":["SENATEDE-26-R","SENATEDE-26-D"]},{"k":"sen","st":"FL","ev":"SENATEFLS-26","m":["SENATEFLS-26-R","SENATEFLS-26-D"]},{"k":"sen","st":"GA","ev":"SENATEGA-26","m":["SENATEGA-26-R","SENATEGA-26-D"]},{"k":"sen","st":"IA","ev":"SENATEIA-26","m":["SENATEIA-26-R","SENATEIA-26-D"]},{"k":"sen","st":"ID","ev":"SENATEID-26","m":["SENATEID-26-R","SENATEID-26-D","SENATEID-26-TACH"]},{"k":"sen","st":"IL","ev":"SENATEIL-26","m":["SENATEIL-26-R","SENATEIL-26-D"]},{"k":"sen","st":"KS","ev":"SENATEKS-26","m":["SENATEKS-26-R","SENATEKS-26-D"]},{"k":"sen","st":"KY","ev":"SENATELA-26","m":["SENATELA-26-R","SENATELA-26-D"]},{"k":"sen","st":"LA","ev":"KXSENATELA-26NOV","m":["KXSENATELA-26NOV-D","KXSENATELA-26NOV-R"]},{"k":"sen","st":"MA","ev":"SENATEMA-26","m":["SENATEMA-26-R","SENATEMA-26-D"]},{"k":"sen","st":"ME","ev":"SENATEME-26","m":["SENATEME-26-R","SENATEME-26-D"]},{"k":"sen","st":"MI","ev":"SENATEMI-26","m":["SENATEMI-26-R","SENATEMI-26-D"]},{"k":"sen","st":"MN","ev":"SENATEMN-26","m":["SENATEMN-26-R","SENATEMN-26-D"]},{"k":"sen","st":"MS","ev":"SENATEMS-26","m":["SENATEMS-26-R","SENATEMS-26-D"]},{"k":"sen","st":"MT","ev":"SENATEMT-26","m":["SENATEMT-26-R","SENATEMT-26-D","SENATEMT-26-IND"]},{"k":"sen","st":"NC","ev":"SENATENC-26","m":["SENATENC-26-R","SENATENC-26-D"]},{"k":"sen","st":"NE","ev":"SENATENE-26","m":["SENATENE-26-R","SENATENE-26-D","SENATENE-26-DOSB"]},{"k":"sen","st":"NH","ev":"SENATENH-26","m":["SENATENH-26-R","SENATENH-26-D"]},{"k":"sen","st":"NJ","ev":"SENATENJ-26","m":["SENATENJ-26-R","SENATENJ-26-D"]},{"k":"sen","st":"NM","ev":"SENATENM-26","m":["SENATENM-26-R","SENATENM-26-D"]},{"k":"sen","st":"OH","ev":"SENATEOHS-26","m":["SENATEOHS-26-R","SENATEOHS-26-D"]},{"k":"sen","st":"OK","ev":"SENATEOK-26","m":["SENATEOK-26-R","SENATEOK-26-D"]},{"k":"sen","st":"OR","ev":"SENATEOR-26","m":["SENATEOR-26-R","SENATEOR-26-D"]},{"k":"sen","st":"RI","ev":"SENATERI-26","m":["SENATERI-26-R","SENATERI-26-D"]},{"k":"sen","st":"SC","ev":"SENATESC-26","m":["SENATESC-26-R","SENATESC-26-D"]},{"k":"sen","st":"SD","ev":"SENATESD-26","m":["SENATESD-26-R","SENATESD-26-D","SENATESD-26-BBEN"]},{"k":"sen","st":"TN","ev":"SENATETN-26","m":["SENATETN-26-R","SENATETN-26-D"]},{"k":"sen","st":"TX","ev":"SENATETX-26","m":["SENATETX-26-R","SENATETX-26-D"]},{"k":"sen","st":"VA","ev":"SENATEVA-26","m":["SENATEVA-26-R","SENATEVA-26-D"]},{"k":"sen","st":"WV","ev":"SENATEWV-26","m":["SENATEWV-26-R","SENATEWV-26-D"]},{"k":"sen","st":"WY","ev":"SENATEWY-26","m":["SENATEWY-26-R","SENATEWY-26-D"]}];
+const API = /^(localhost|127\.0\.0\.1)$/.test(location.hostname) ? "" : "https://midterm-wire.frctop50.workers.dev";
+const FEEDS = ["results", "races", "npr", "pbs"];
+// seats not on the 2026 ballot
+const HOLD = { sen: { D: 34, R: 31, I: 0 }, gov: { D: 6, R: 8, I: 0 } };
+const NAMES = {AL:"Alabama",AK:"Alaska",AZ:"Arizona",AR:"Arkansas",CA:"California",CO:"Colorado",CT:"Connecticut",DE:"Delaware",FL:"Florida",GA:"Georgia",HI:"Hawaii",ID:"Idaho",IL:"Illinois",IN:"Indiana",IA:"Iowa",KS:"Kansas",KY:"Kentucky",LA:"Louisiana",ME:"Maine",MD:"Maryland",MA:"Massachusetts",MI:"Michigan",MN:"Minnesota",MS:"Mississippi",MO:"Missouri",MT:"Montana",NE:"Nebraska",NV:"Nevada",NH:"New Hampshire",NJ:"New Jersey",NM:"New Mexico",NY:"New York",NC:"North Carolina",ND:"North Dakota",OH:"Ohio",OK:"Oklahoma",OR:"Oregon",PA:"Pennsylvania",RI:"Rhode Island",SC:"South Carolina",SD:"South Dakota",TN:"Tennessee",TX:"Texas",UT:"Utah",VT:"Vermont",VA:"Virginia",WA:"Washington",WV:"West Virginia",WI:"Wisconsin",WY:"Wyoming"};
+const ABBR = Object.fromEntries(Object.entries(NAMES).map(([a, n]) => [n, a]));
+// small northeastern states get their label out in the Atlantic with a line
+const SIDE = { VT: [905, 90], NH: [945, 120], MA: [960, 165], RI: [960, 200], CT: [945, 232], NJ: [935, 268], DE: [930, 302], MD: [925, 336] };
+const NUDGE = { FL: [28, 10], LA: [-14, 0], MI: [18, 32], KY: [6, 4], CA: [-10, 8], ID: [0, 22], WV: [-4, 4], NY: [6, 0], OK: [12, 0], VA: [8, 2] };
+// map fill by party and how sure the bet is (3 = 90%+, 2 = 75%+, 1 = 60%+)
+const FILL = {
+  D3: "#3366CC", D2: "#6699FF", D1: "#BBCCFF",
+  R3: "#CC0000", R2: "#FF6666", R1: "#FFBBBB",
+  I3: "#339933", I2: "#66CC66", I1: "#BBEEBB",
+  T: "#FFFF66", none: "#E8E8E8",
+};
+
+const $ = s => document.querySelector(s);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const pct = p => p == null ? "--" : p > 0 && p < 0.01 ? "&lt;1%" : p < 1 && p > 0.99 ? "&gt;99%" : Math.round(p * 100) + "%";
+// 0.75 -> "3-1"; underdogs read the other way round, 0.25 -> "1-3"
+function odds(p) {
+  if (p == null) return "--";
+  if (p >= 0.995) return "lock";
+  if (p <= 0.005) return "long shot";
+  const fav = Math.max(p, 1 - p), r = fav / (1 - fav);
+  if (r < 1.1) return "even";
+  const n = r < 10 ? Math.round(r * 2) / 2 : Math.round(r);
+  return p >= 0.5 ? `${n}-1` : `1-${n}`;
+}
+const pts = d => d ? `<span class="${d > 0 ? "up" : "dn"}">${d > 0 ? "+" : "&minus;"}${Math.abs(d)}</span>` : "0";
+const etTime = (d = new Date()) => d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit" });
+
+let mode = "sen";
+const markets = {};          // ticker -> market
+let firstPoll = true, picked = null;
+
+/* ---------- race helpers ---------- */
+const party = t => { const s = t.slice(t.lastIndexOf("-") + 1); return s === "D" || s === "R" ? s : "I"; };
+const raceName = r => r.k === "ctl" ? (r.st === "S" ? "Senate control" : "House control")
+  : NAMES[r.st] + (r.k === "sen" ? " Senate" : " Governor");
+function shortName(m) {
+  const n = m.yes_sub_title || "";
+  if (/party/i.test(n)) return { D: "Democrats", R: "Republicans" }[party(m.ticker)] || n;
+  return n.split(" ").filter(w => !/^(jr\.?|sr\.?|ii|iii)$/i.test(w)).pop();
+}
+// share = the market price scaled so a race's candidates add up to 100%
+function candidates(r) {
+  const ms = r.m.map(t => markets[t]).filter(Boolean);
+  const won = ms.find(m => m.result === "yes");
+  const sum = ms.reduce((a, m) => a + price(m), 0) || 1;
+  return ms.map(m => {
+    const prev = num(m.previous_price_dollars);
+    return {
+      m, party: party(m.ticker), name: shortName(m), full: m.yes_sub_title,
+      share: won ? (m === won ? 1 : 0) : price(m) / sum, won: m === won,
+      move: prev == null || won ? 0 : Math.round((price(m) - prev) * 100),
+    };
+  }).sort((a, b) => b.share - a.share);
+}
+const num = v => v == null || v === "" ? null : +v;
+function price(m) {
+  if (m.result === "yes") return 1;
+  if (m.result === "no") return 0;
+  return num(m.last_price_dollars) ?? 0;
+}
+function lean(r) {
+  const c = candidates(r);
+  if (!c.length) return null;
+  const top = c[0], sure = top.won || top.share >= 0.97;
+  const lvl = top.share >= 0.9 ? 3 : top.share >= 0.75 ? 2 : 1;
+  return { top, sure, key: top.share < 0.6 && !sure ? "T" : top.party + lvl };
+}
+
+/* ---------- map ---------- */
+function ringsToPath(rings) {
+  return rings.map(r => "M" + r.map(p => p[0].toFixed(1) + "," + p[1].toFixed(1)).join("L") + "Z").join("");
+}
+async function drawMap() {
+  const topo = await fetch("https://cdn.jsdelivr.net/npm/us-atlas@3.0.1/states-albers-10m.json").then(r => r.json());
+  const fc = topojson.feature(topo, topo.objects.states);
+  const g = $("#states"), lg = $("#labels");
+  const NS = "http://www.w3.org/2000/svg";
+  for (const f of fc.features) {
+    const ab = ABBR[f.properties.name];
+    if (!ab) continue;
+    const polys = f.geometry.type === "Polygon" ? [f.geometry.coordinates] : f.geometry.coordinates;
+    const grp = document.createElementNS(NS, "g");
+    grp.setAttribute("class", "st"); grp.dataset.st = ab;
+    grp.innerHTML = `<path d="${polys.map(ringsToPath).join("")}" fill="${FILL.none}" stroke="#000" stroke-width="1" stroke-linejoin="round"/><title>${NAMES[ab]}</title>`;
+    g.appendChild(grp);
+    grp.addEventListener("click", () => pick(ab));
+    // label at the middle of the biggest piece
+    let best = null, bestA = 0;
+    for (const poly of polys) {
+      const xs = poly[0].map(p => p[0]), ys = poly[0].map(p => p[1]);
+      const a = (Math.max(...xs) - Math.min(...xs)) * (Math.max(...ys) - Math.min(...ys));
+      if (a > bestA) { bestA = a; best = [(Math.max(...xs) + Math.min(...xs)) / 2, (Math.max(...ys) + Math.min(...ys)) / 2]; }
+    }
+    const [nx, ny] = NUDGE[ab] || [0, 0];
+    let [x, y] = [best[0] + nx, best[1] + ny];
+    if (SIDE[ab]) {
+      const [sx, sy] = SIDE[ab];
+      lg.insertAdjacentHTML("beforeend", `<line x1="${x}" y1="${y}" x2="${sx - 14}" y2="${sy - 5}" stroke="#000" stroke-width="1"/>`);
+      [x, y] = [sx, sy];
+    }
+    lg.insertAdjacentHTML("beforeend", `<text data-st="${ab}" x="${x}" y="${y + 5}" text-anchor="middle" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="#000" stroke="#fff" stroke-width="3" style="cursor:pointer;paint-order:stroke">${ab}</text>`);
+  }
+  lg.querySelectorAll("text").forEach(t => t.addEventListener("click", () => pick(t.dataset.st)));
+  paint();
+}
+function paint() {
+  const byState = Object.fromEntries(RACES.filter(r => r.k === mode).map(r => [r.st, r]));
+  document.querySelectorAll("#states .st").forEach(g => {
+    const r = byState[g.dataset.st], L = r && lean(r);
+    g.querySelector("path").setAttribute("fill", L ? FILL[L.key] : FILL.none);
+    g.querySelector("title").textContent = NAMES[g.dataset.st] + (L ? `: ${L.top.full} (${L.top.party}) ${Math.round(L.top.share * 100)}%` : ": no race");
+  });
+  document.querySelectorAll("#labels text").forEach(t => {
+    const r = byState[t.dataset.st], L = r && lean(r);
+    t.textContent = t.dataset.st + (L && L.sure ? "*" : "");
+  });
+  const word = mode === "sen" ? "Senate" : "Governor";
+  $("#boardTitle").textContent = word + " Map";
+  $("#tableTitle").textContent = `All ${word} Races`;
+  const sw = (k, t) => `<span class="sw" style="background:${FILL[k]}"></span> ${t}`;
+  $("#legend").innerHTML = [sw("D3", "Dem 90%+"), sw("D2", "Dem 75%+"), sw("D1", "Dem 60%+"), sw("T", "Toss-up"),
+    sw("R1", "Rep 60%+"), sw("R2", "Rep 75%+"), sw("R3", "Rep 90%+"), sw("I2", "Independent"), sw("none", "No race")].join(" &nbsp; ") +
+    "<br>* = 97% or better, or the market has settled";
+  drawControl(); drawSeats(); drawTable();
+}
+
+/* ---------- tables ---------- */
+function control(st) {
+  const r = RACES.find(r => r.k === "ctl" && r.st === st);
+  return { ...Object.fromEntries(candidates(r).map(c => [c.party, c.share])) };
+}
+function drawControl() {
+  const row = (name, st) => {
+    const c = control(st), fav = (c.D ?? 0) >= (c.R ?? 0) ? "D" : "R";
+    return `<tr><td><b>${name}</b></td>
+      <td align="right" class="D">${pct(c.D)}</td><td align="right" class="R">${pct(c.R)}</td>
+      <td align="center"><span class="${fav}">${fav === "D" ? "Democrats" : "Republicans"}</span> ${odds(c[fav])}</td>
+</tr>`;
+  };
+  $("#control").innerHTML = `<tr bgcolor="#C0C0C0"><th>Chamber</th><th>Dem chance</th><th>Rep chance</th><th>Favorite &amp; odds</th></tr>` +
+    row("Senate", "S") + row("House", "H");
+}
+function drawSeats() {
+  const s = { ...HOLD[mode] }, lead = { D: 0, R: 0, I: 0 };
+  let toss = 0;
+  for (const r of RACES.filter(r => r.k === mode)) {
+    for (const c of candidates(r)) s[c.party] += c.share;
+    const L = lean(r);
+    if (L) L.key === "T" ? toss++ : lead[L.top.party]++;
+  }
+  const f = n => n.toFixed(1);
+  $("#seats").innerHTML = `<b>Expected ${mode === "sen" ? "Senate seats" : "governors"} after tonight:</b>
+    <span class="D">Democrats ${f(s.D)}</span>, <span class="R">Republicans ${f(s.R)}</span>${s.I >= 0.05 ? `, <span class="I">Independents ${f(s.I)}</span>` : ""}
+    <br><font size="2">Races leaning D: ${lead.D} &middot; leaning R: ${lead.R}${lead.I ? ` &middot; leaning Ind: ${lead.I}` : ""} &middot; toss-ups: ${toss}
+    &middot; ${mode === "sen" ? "51 seats wins outright (50 + the Vice President also works)" : "out of 50 governors"}</font>`;
+}
+function drawTable() {
+  const rows = RACES.filter(r => r.k === mode).map(r => ({ r, c: candidates(r) })).filter(x => x.c.length)
+    .sort((a, b) => a.c[0].share - b.c[0].share);
+  const cand = x => x ? `<span class="${x.party}">${esc(x.full)} (${x.party})</span>` : "--";
+  $("#races").innerHTML = `<tr bgcolor="#C0C0C0"><th>State</th><th>Favorite</th><th>Chance</th><th>Odds</th><th>Runner-up</th><th>Chance</th><th>Today</th></tr>` +
+    rows.map(({ r, c }) => `<tr id="row-${r.st}"${r.st === picked ? ' class="hl"' : ""}>
+      <td class="nowrap">${NAMES[r.st]}</td><td>${c[0].won ? "<b>WON:</b> " : ""}${cand(c[0])}</td>
+      <td align="right"><b>${pct(c[0].share)}</b></td><td align="center" class="nowrap">${odds(c[0].share)}</td>
+      <td>${cand(c[1])}</td><td align="right">${c[1] ? pct(c[1].share) : "--"}</td>
+      <td align="right" title="change in the favorite's chance since yesterday, in points">${pts(c[0].move)}</td></tr>`).join("");
+}
+function pick(st) {
+  picked = st;
+  drawTable();
+  const row = $("#row-" + st);
+  if (row) row.scrollIntoView({ behavior: "smooth", block: "center" });
+  else $("#status").textContent = `No ${mode === "sen" ? "Senate" : "governor"} race in ${NAMES[st]} this year.`;
+}
+
+/* ---------- tickers ---------- */
+class Tape {
+  constructor(el, speed, refill) {
+    this.el = el; this.track = el.querySelector(".track"); this.speed = speed; this.refill = refill;
+    this.x = el.clientWidth; this.queue = []; this.paused = false; this.last = performance.now();
+    el.addEventListener("mouseenter", () => this.paused = true);
+    el.addEventListener("mouseleave", () => this.paused = false);
+    requestAnimationFrame(t => this.step(t));
+  }
+  flush() { this.track.innerHTML = ""; this.queue = []; this.x = 0; }
+  push(html, front) { front ? this.queue.unshift(html) : this.queue.push(html); }
+  step(t) {
+    const dt = Math.min(0.1, (t - this.last) / 1000); this.last = t;
+    if (!this.paused && !matchMedia("(prefers-reduced-motion: reduce)").matches) this.x -= this.speed * dt;
+    const first = this.track.firstElementChild;
+    if (first && this.x + first.offsetWidth < 0) { this.x += first.offsetWidth; first.remove(); }
+    while (this.x + this.track.scrollWidth < this.el.clientWidth * 2) {
+      if (!this.queue.length) this.refill(this);
+      if (!this.queue.length) break;
+      this.track.insertAdjacentHTML("beforeend", this.queue.shift());
+    }
+    this.track.style.transform = `translateX(${this.x}px)`;
+    requestAnimationFrame(t2 => this.step(t2));
+  }
+}
+function marketTick(r) {
+  const [a, b] = candidates(r);
+  const tag = r.k === "ctl" ? (r.st === "S" ? "SENATE CONTROL" : "HOUSE CONTROL") : `${NAMES[r.st]} ${r.k === "sen" ? "Senate" : "Gov"}`;
+  return `<span class="tick"><b>${tag}:</b> ${esc(a.name)} (${a.party}) ${pct(a.share)}, ${odds(a.share)} over ${esc(b.name)} (${b.party})${a.move ? ` [${pts(a.move)} today]` : ""} &nbsp;***</span>`;
+}
+const tapeA = new Tape($("#tapeA"), 70, tape => {
+  if (!Object.keys(markets).length) return tape.push(`<span class="tick">Loading odds... &nbsp;***</span>`);
+  const ctl = RACES.filter(r => r.k === "ctl");
+  const rest = RACES.filter(r => r.k !== "ctl" && candidates(r).length > 1)
+    .sort((a, b) => candidates(a)[0].share - candidates(b)[0].share);
+  [...ctl, ...rest].forEach(r => tape.push(marketTick(r)));
+});
+let headlines = [];
+const newsTick = h => `<a class="tick" href="${esc(h.link)}">${esc(h.title)}</a><span class="tick">(${esc(h.source)}) &nbsp;***</span>`;
+const tapeB = new Tape($("#tapeB"), 60, tape => {
+  if (!headlines.length) return tape.push(`<span class="tick">Loading news... &nbsp;***</span>`);
+  headlines.slice(0, 25).forEach(h => tape.push(newsTick(h)));
+});
+
+/* ---------- news table ---------- */
+// market moves go in the news table too, so big swings don't get missed
+const said = {};             // race -> {leader, share} we last reported
+function addNews(time, html, source, flag) {
+  $("#news tr").insertAdjacentHTML("afterend",
+    `<tr${flag ? ' bgcolor="#FFFF99"' : ""}><td class="nowrap">${time}</td><td>${flag ? `<b>${flag}:</b> ` : ""}${html}</td><td>${esc(source)}</td></tr>`);
+  const rows = $("#news").rows;
+  while (rows.length > 61) rows[rows.length - 1].remove();
+}
+function marketNews() {
+  for (const r of RACES) {
+    const c = candidates(r);
+    if (c.length < 2) continue;
+    const top = c[0], prev = said[raceName(r)];
+    const who = x => `${esc(x.full)} (${x.party})`;
+    let msg = null;
+    if (prev && !prev.won) {
+      if (top.won) msg = ["RESULT", `${raceName(r)}: the market has settled. ${who(top)} wins.`];
+      else if (prev.leader !== top.m.ticker && top.share - c[1].share > 0.02)
+        msg = ["LEAD CHANGE", `${raceName(r)}: ${who(top)} is now favored, ${pct(top.share)} (${odds(top.share)}).`];
+      else if (top.share >= 0.97 && prev.share < 0.97)
+        msg = ["NEARLY CERTAIN", `${raceName(r)}: ${who(top)} is up to ${pct(top.share)}.`];
+      else if (Math.abs(top.share - prev.share) >= (r.k === "ctl" ? 0.02 : 0.04))
+        msg = ["", `${raceName(r)}: ${who(top)} ${top.share > prev.share ? "up" : "down"} to ${pct(top.share)} (${odds(top.share)}).`];
+      else continue;
+    }
+    if (msg) addNews(etTime(), msg[1], "Betting odds", msg[0]);
+    said[raceName(r)] = { leader: top.m.ticker, share: top.share, won: top.won };
+  }
+}
+
+/* ---------- data ---------- */
+async function pollKalshi() {
+  const all = RACES.flatMap(r => r.m), chunks = [];
+  for (let i = 0; i < all.length; i += 40) chunks.push(all.slice(i, i + 40));
+  try {
+    for (const ch of chunks) {
+      const res = await fetch(`${API}/api/kalshi?tickers=${ch.join(",")}`);
+      if (!res.ok) throw new Error(res.status);
+      for (const m of (await res.json()).markets || []) markets[m.ticker] = m;
+    }
+    $("#status").textContent = "Odds updated " + etTime() + " ET";
+  } catch (e) {
+    $("#status").textContent = "Could not get the odds, trying again in 30 seconds";
+    return;
+  }
+  if (firstPoll) tapeA.flush();
+  marketNews();   // the first pass only records starting odds
+  firstPoll = false;
+  paint();
+}
+const seen = new Set();
+let firstNews = true;
+async function pollNews() {
+  const items = [];
+  await Promise.all(FEEDS.map(async f => {
+    try {
+      const xml = new DOMParser().parseFromString(await fetch(`${API}/api/rss?f=${f}`).then(r => r.text()), "text/xml");
+      const chan = xml.querySelector("channel > title")?.textContent || f;
+      xml.querySelectorAll("item").forEach(it => {
+        const g = s => it.querySelector(s)?.textContent?.trim() || "";
+        let title = g("title"), source = g("source") || chan.replace(/^NPR Topics: /, "NPR ").replace(/ \|.*$/, "");
+        if (source && title.endsWith(" - " + source)) title = title.slice(0, -(source.length + 3));
+        const date = new Date(g("pubDate"));
+        if (Date.now() - date > 36 * 3600e3) return;
+        items.push({ title, link: g("link"), source, date, key: title.toLowerCase().replace(/[^a-z0-9]/g, "").slice(0, 60) });
+      });
+    } catch (e) { }
+  }));
+  items.sort((a, b) => b.date - a.date);
+  const fresh = [];
+  for (const it of items) if (!seen.has(it.key)) { seen.add(it.key); fresh.push(it); }
+  headlines = [...fresh, ...headlines].slice(0, 60);
+  for (const h of fresh.slice(0, firstNews ? 20 : 10).reverse()) {
+    addNews(etTime(h.date), `<a href="${esc(h.link)}">${esc(h.title)}</a>`, h.source);
+    if (!firstNews) tapeB.push(newsTick(h), true);
+  }
+  firstNews = false;
+}
+
+/* ---------- clock, map switch, boot ---------- */
+function clock() {
+  const d = new Date();
+  $("#clock").textContent = d.toLocaleTimeString("en-US", { timeZone: "America/New_York", hour: "numeric", minute: "2-digit", second: "2-digit" }) + " Eastern";
+  $("#dateline").textContent = d.toLocaleDateString("en-US", { timeZone: "America/New_York", weekday: "long", month: "long", day: "numeric", year: "numeric" });
+}
+setInterval(clock, 1000); clock();
+document.querySelectorAll('input[name="mode"]').forEach(b => b.onchange = () => { mode = b.value; picked = null; paint(); });
+drawMap().catch(() => $("#status").textContent = "Map failed to load");
+pollKalshi(); setInterval(pollKalshi, 30000);
+pollNews(); setInterval(pollNews, 120000);
+</script>
+</body>
+</html>
