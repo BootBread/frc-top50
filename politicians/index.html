@@ -1,0 +1,242 @@
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FRC TOP 50 - Politician Match</title>
+<style>
+/* Same plain 1995 look as the rest of frctop50.com: browser defaults, tables, <hr>s. */
+body { max-width: 900px; margin: 8px auto; padding: 0 8px; }
+table { border-collapse: collapse; }
+.wide { width: 100%; max-width: 760px; }
+.scroll { overflow-x: auto; max-width: 100%; }
+.D { color: #0000CC; } .R { color: #CC0000; } .I, .NPP, .PPD { color: #007700; }
+.match td { vertical-align: top; }
+.big { font-size: 28px; font-weight: bold; }
+.quiet { color: #555555; }
+#q { font-size: 16px; width: 260px; max-width: 70vw; }
+ul.pick { margin: 4px 0; }
+</style>
+</head>
+<body bgcolor="#FFFFFF" text="#000000" link="#0000EE" vlink="#551A8B">
+<center>
+<h1>FRC TOP 50</h1>
+<b>The Definitive Ranking of FIRST Robotics Competition Teams</b>
+<p>
+<a href="../index.html">Home</a> |
+<a href="../methodology.html">Methodology</a> |
+<a href="../faq.html">FAQ</a> |
+<a href="../changelog.html">Changelog</a> |
+<a href="../arcade/">Arcade</a> |
+<a href="../midterms/">Midterms</a> |
+<a href="./">Politicians</a>
+</center>
+<hr>
+
+<center>
+<h2>Politician Match</h2>
+<i>Every US FRC team, matched with a famous American politician or judge by the TOP 50 Engine.</i>
+<p>
+<form id="f" onsubmit="go(); return false;">
+<b>Team number, team name, or politician:</b><br>
+<input id="q" type="text" placeholder="254, Cheesy Poofs, Lincoln..." autocomplete="off">
+<input type="submit" value="Look Up">
+<input type="button" value="Random Team" onclick="randomTeam()">
+</form>
+<span id="status">Loading teams...</span>
+</center>
+
+<div id="out"></div>
+
+<hr>
+<center>
+<h3>Most Matched</h3>
+<div class="scroll"><table border="1" cellpadding="4" cellspacing="0" id="board"></table></div>
+<p><font size="2">Click a name to see every team matched with that politician.</font></p>
+</center>
+
+<hr>
+<h3>How Matches Work</h3>
+<p>The TOP 50 Engine checks each team against 240 well-known American politicians and judges,
+past and present, and keeps the strongest clue:</p>
+<ol>
+<li><b>Number.</b> Teams 1 through 47 are matched with that numbered President. Certain famous numbers and years (1600, 1776, 1969...) have their own match.</li>
+<li><b>Name.</b> A politician's name appears in the team name.</li>
+<li><b>Theme.</b> A word in the team name matches something the politician is known for. If several do, the least common word wins.</li>
+<li><b>Hometown.</b> The team's city shares a name with a politician.</li>
+<li><b>The full reading.</b> Otherwise, every candidate is scored on:
+  <ul>
+  <li><b>longevity:</b> seasons in FRC vs. years in public life</li>
+  <li><b>record:</b> winning teams get famous winners</li>
+  <li><b>strength:</b> the country's strongest teams get Presidents, Chief Justices and Speakers</li>
+  <li><b>momentum:</b> teams on the rise get rising stars; veteran teams get elder statesmen</li>
+  <li><b>game style:</b> auto specialists get planners, endgame specialists get closers, teleop workhorses get workhorses</li>
+  <li><b>rookie year:</b> the year a team was founded vs. the year someone took office</li>
+  <li><b>hometown:</b> big-city teams get big-city figures; small-town teams get small-town figures</li>
+  <li><b>home state</b></li>
+  </ul>
+  The best total wins.</li>
+</ol>
+<p>Matches are for fun and say nothing about anyone's politics. Each team also gets its real
+elected officials, listed separately under <b>Your Officials</b>.</p>
+<h3>About Your Officials</h3>
+<p><font size="2">House districts are found from the team's ZIP code (or city, when no ZIP is listed), not its street
+address. When a ZIP crosses district lines, every district is listed with its share of the ZIP.
+Nine states (AL, CA, FL, LA, NC, OH, TN, TX, UT) use new district maps starting January 3, 2027.
+Current members of Congress from the <a href="https://github.com/unitedstates/congress-legislators">congress-legislators</a> project;
+November 3, 2026 results and governors from Wikipedia as of <span id="built"></span>; districts from the US Census Bureau and Wikimedia Commons;
+teams from <a href="https://www.statbotics.io/">Statbotics</a> and <a href="https://www.thebluealliance.com/">The Blue Alliance</a>.</font></p>
+
+<hr>
+<center>
+<font size="2">
+Team data from <a href="https://www.thebluealliance.com/">The Blue Alliance</a>.
+</font>
+</center>
+
+<script>
+let DATA = null, BY_NUM = {};
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const ord = n => n + (n % 100 >= 11 && n % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][n % 10] || "th");
+
+function who(id, extra) {
+  if (!id) return '<span class="quiet">Vacant</span>';
+  const p = DATA.people[id];
+  if (!p) return "?";
+  const party = p.p ? ` <span class="${esc(p.p)}">(${esc(p.p)})</span>` : "";
+  return esc(p.n) + party + (extra || "");
+}
+function later(id, nowId) {
+  if (id === "same" || id === undefined) return '<span class="quiet">no race (stays)</span>';
+  if (id === null) return '<span class="quiet">Not yet called</span>';
+  if (id === "runoff") return '<span class="quiet">Runoff in December</span>';
+  if (id === "appt") return '<span class="quiet">To be appointed (Senator elected governor)</span>';
+  const a = DATA.people[id], b = DATA.people[nowId];
+  if (a && b && a.n.split(" ").pop() === b.n.split(" ").pop()) return '<span class="quiet">re-elected</span>';
+  return who(id);
+}
+function distName(st, d) {
+  if (st === "DC") return "Delegate";
+  if (st === "PR") return "Resident Commissioner";
+  return d === 0 ? "At-large" : "District " + d;
+}
+
+function famousLink(id) {
+  return `<a href="#p=${encodeURIComponent(id)}" onclick="showPerson('${id}'); return false;">${esc(DATA.people[id].n)}</a>`;
+}
+
+function showTeam(r) {
+  history.replaceState(null, "", "#" + r.t);
+  const [best, ...alts] = r.fm, p = DATA.people[best[0]], S = DATA.states[r.s];
+  let h = `<hr><center><h2>Team ${r.t} &middot; ${esc(r.nk)}</h2><i>${esc(r.c)}, ${esc(r.s)}</i>
+  <p><table border="1" cellpadding="8" cellspacing="0" class="wide match">
+  <tr bgcolor="#C0C0C0"><th>Famous Match</th></tr>
+  <tr><td align="center"><span class="big">${famousLink(best[0])}</span><br>${esc(p.r)}
+  <p><b>Why:</b> ${esc(best[1])}</td></tr>`;
+  const m = r.m || {}, seasons = Math.max(1, 2026 - (r.rk || 2026) + 1), read = [
+    `${seasons} season${seasons > 1 ? "s" : ""} (rookie ${r.rk || "?"})`,
+    r.wl && r.wl !== "0-0" ? `${r.wl} all-time` : "",
+    { elite: "top 5% in the US", strong: "top 20% in the US" }[m.strength] || "",
+    { plan: "auto specialist", work: "teleop workhorse", close: "endgame specialist" }[m.style] || "",
+    m.momentum === "rising" ? "on the rise" : "",
+    { city: "big-city team", town: "small-town team" }[m.home] || ""].filter(Boolean);
+  h += `<tr><td><font size="2"><b>Engine readings:</b> ${read.map(esc).join(" &middot; ")}</font></td></tr>`;
+  if (alts.length) h += `<tr><td><font size="2"><b>Also considered:</b><ul class="pick">${alts.map(a =>
+      `<li>${famousLink(a[0])} &mdash; ${esc(a[1])}</li>`).join("")}</ul></font></td></tr>`;
+  h += `</table></center>`;
+
+  // ---- real officials
+  const rows = [];
+  const cds = r.cd || [];
+  if (cds.length) {
+    const nowCd = cds.map(([d, pct]) => who(S.house[d], cds.length > 1 ? ` <font size="2">&middot; ${distName(r.s, d)}, ${pct}% of the ZIP</font>` : ` <font size="2">&middot; ${distName(r.s, d)}</font>`)).join("<br>");
+    const d27 = r.cd27 ?? cds[0][0];
+    const w = S.house27[d27];
+    let next = typeof w === "string" && DATA.people[w] ? who(w) : later(w === undefined ? null : w);
+    if (S.redrawn) next += ` <font size="2">&middot; new map, ${distName(r.s, d27)}</font>`;
+    else if (cds.length > 1) next += ` <font size="2">&middot; ${distName(r.s, d27)}</font>`;
+    rows.push([r.s === "DC" ? "Delegate" : r.s === "PR" ? "Resident Commissioner" : "U.S. House", nowCd, next]);
+  } else rows.push(["U.S. House", '<span class="quiet">Unknown (no location on file)</span>', ""]);
+  S.sen.forEach((id, i) => rows.push(["U.S. Senate", who(id), later(S.sen27[i], id)]));
+  if (S.gov) rows.push(["Governor", who(S.gov), later(S.gov27, S.gov)]);
+  h += `<center><h3>Your Officials</h3><div class="scroll"><table border="1" cellpadding="4" cellspacing="0" class="wide">
+  <tr bgcolor="#C0C0C0"><th>Office</th><th>Now</th><th>From January 2027</th></tr>
+  ${rows.map(x => `<tr><td>${x[0]}</td><td>${x[1]}</td><td>${x[2]}</td></tr>`).join("")}
+  </table></div>
+  <font size="2">${r.how === "city" ? "No ZIP on file, so the district is estimated from the city." : ""}
+  ${S.redrawn ? r.s + " has a new district map starting in 2027." : ""}</font></center>`;
+  $("out").innerHTML = h;
+}
+
+function showPerson(id) {
+  history.replaceState(null, "", "#p=" + encodeURIComponent(id));
+  const p = DATA.people[id];
+  const mine = DATA.teams.filter(r => r.fm[0][0] === id);
+  const also = DATA.teams.filter(r => r.fm.slice(1).some(a => a[0] === id));
+  const list = arr => arr.map(r => `<tr><td align="right"><a href="#${r.t}" onclick="showTeam(BY_NUM[${r.t}]); return false;">${r.t}</a></td><td>${esc(r.nk)}</td><td>${esc(r.c)}, ${r.s}</td><td>${esc(r.fm.find(a => a[0] === id)[1])}</td></tr>`).join("");
+  let h = `<hr><center><h2>${esc(p.n)}</h2><i>${esc(p.r)}</i><p>${esc(p.b || "")}</p>
+  <p><b>${mine.length}</b> team${mine.length === 1 ? "" : "s"} matched${also.length ? `, plus ${also.length} runner-up` : ""}.</p>`;
+  if (mine.length) h += `<div class="scroll"><table border="1" cellpadding="4" cellspacing="0" class="wide"><tr bgcolor="#C0C0C0"><th>Team</th><th>Nickname</th><th>Location</th><th>Why</th></tr>${list(mine)}</table></div>`;
+  if (also.length) h += `<h3>Runner-up for</h3><div class="scroll"><table border="1" cellpadding="4" cellspacing="0" class="wide"><tr bgcolor="#C0C0C0"><th>Team</th><th>Nickname</th><th>Location</th><th>Why</th></tr>${list(also)}</table></div>`;
+  $("out").innerHTML = h + "</center>";
+}
+
+function showChoices(teams, people) {
+  let h = `<hr><center><b>Did you mean:</b><table border="1" cellpadding="4" cellspacing="0" class="wide"><tr bgcolor="#C0C0C0"><th>Result</th><th>Details</th></tr>`;
+  h += people.slice(0, 10).map(id => `<tr><td>${famousLink(id)}</td><td>${esc(DATA.people[id].r)}</td></tr>`).join("");
+  h += teams.slice(0, 25).map(r => `<tr><td><a href="#${r.t}" onclick="showTeam(BY_NUM[${r.t}]); return false;">Team ${r.t}</a></td><td>${esc(r.nk)} &middot; ${esc(r.c)}, ${r.s}</td></tr>`).join("");
+  $("out").innerHTML = h + "</table></center>";
+}
+
+function go() {
+  const q = $("q").value.trim(), ql = q.toLowerCase();
+  if (!q) return;
+  if (/^\d+$/.test(q)) {
+    const r = BY_NUM[+q];
+    if (r) return showTeam(r);
+    $("out").innerHTML = `<hr><center>Team ${esc(q)} isn't an active US team this season. (International teams aren't included.)</center>`;
+    return;
+  }
+  const people = Object.keys(DATA.people).filter(id => id.startsWith("f_") && DATA.people[id].n.toLowerCase().includes(ql));
+  const teams = DATA.teams.filter(r => r.nk.toLowerCase().includes(ql));
+  if (people.length === 1 && !teams.length) return showPerson(people[0]);
+  if (teams.length === 1 && !people.length) return showTeam(teams[0]);
+  if (!people.length && !teams.length) {
+    $("out").innerHTML = `<hr><center>No team or famous politician matches "${esc(q)}".</center>`;
+    return;
+  }
+  showChoices(teams, people);
+}
+
+function randomTeam() {
+  const r = DATA.teams[Math.floor(Math.random() * DATA.teams.length)];
+  $("q").value = r.t;
+  showTeam(r);
+}
+
+function fromHash() {
+  const h = decodeURIComponent(location.hash.slice(1));
+  if (/^\d+$/.test(h) && BY_NUM[+h]) { $("q").value = h; showTeam(BY_NUM[+h]); }
+  else if (h.startsWith("p=") && DATA.people[h.slice(2)]) showPerson(h.slice(2));
+}
+
+function board() {
+  const n = {};
+  DATA.teams.forEach(r => n[r.fm[0][0]] = (n[r.fm[0][0]] || 0) + 1);
+  const top = Object.entries(n).sort((a, b) => b[1] - a[1]).slice(0, 15);
+  $("board").innerHTML = `<tr bgcolor="#C0C0C0"><th>Rank</th><th>Politician</th><th>Teams</th></tr>` +
+    top.map(([id, c], i) => `<tr><td align="right">${i + 1}</td><td>${famousLink(id)}</td><td align="right">${c}</td></tr>`).join("");
+}
+
+fetch("data.json").then(r => r.json()).then(d => {
+  DATA = d;
+  d.teams.forEach(r => BY_NUM[r.t] = r);
+  $("status").textContent = `${d.teams.length.toLocaleString()} teams on file.`;
+  $("built").textContent = new Date(d.built + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  board();
+  fromHash();
+  window.addEventListener("hashchange", fromHash);
+}).catch(e => $("status").textContent = "Couldn't load the team list: " + e);
+</script>
+</body>
+</html>
