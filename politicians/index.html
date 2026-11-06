@@ -228,7 +228,7 @@ function board() {
     top.map(([id, c], i) => `<tr><td align="right">${i + 1}</td><td>${famousLink(id)}</td><td align="right">${c}</td></tr>`).join("");
 }
 
-fetch("data.json").then(r => r.json()).then(d => {
+fetch("data.json", { cache: "no-cache" }).then(r => r.json()).then(d => {
   DATA = d;
   d.teams.forEach(r => BY_NUM[r.t] = r);
   $("status").textContent = `${d.teams.length.toLocaleString()} teams on file.`;
