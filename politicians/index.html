@@ -56,7 +56,7 @@ ul.pick { margin: 4px 0; }
 
 <hr>
 <h3>How Matches Work</h3>
-<p>The TOP 50 Engine checks each team against 240 well-known American politicians and judges,
+<p>The TOP 50 Engine checks each team against <span id="npeople">300+</span> well-known American political figures and judges,
 past and present, and keeps the strongest clue:</p>
 <ol>
 <li><b>Number.</b> Teams 1 through 47 are matched with that numbered President. Certain famous numbers and years (1600, 1776, 1969...) have their own match.</li>
@@ -233,6 +233,7 @@ fetch("data.json").then(r => r.json()).then(d => {
   d.teams.forEach(r => BY_NUM[r.t] = r);
   $("status").textContent = `${d.teams.length.toLocaleString()} teams on file.`;
   $("built").textContent = new Date(d.built + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+  $("npeople").textContent = Object.keys(d.people).filter(id => id.startsWith("f_")).length;
   board();
   fromHash();
   window.addEventListener("hashchange", fromHash);
