@@ -48,13 +48,6 @@ ul.pick { margin: 4px 0; }
 <div id="out"></div>
 
 <hr>
-<center>
-<h3>Most Matched</h3>
-<div class="scroll"><table border="1" cellpadding="4" cellspacing="0" id="board"></table></div>
-<p><font size="2">Click a name to see every team matched with that politician.</font></p>
-</center>
-
-<hr>
 <h3>How Matches Work</h3>
 <p>The TOP 50 Engine checks each team against <span id="npeople">300+</span> well-known American political figures and judges,
 past and present, and keeps the strongest clue:</p>
@@ -76,15 +69,9 @@ past and present, and keeps the strongest clue:</p>
   </ul>
   The best total wins.</li>
 </ol>
-<p>Matches are for fun and say nothing about anyone's politics. Each team also gets its real
-elected officials, listed separately under <b>Your Officials</b>.</p>
-<h3>About Your Officials</h3>
-<p><font size="2">House districts are found from the team's ZIP code (or city, when no ZIP is listed), not its street
-address. When a ZIP crosses district lines, every district is listed with its share of the ZIP.
-Nine states (AL, CA, FL, LA, NC, OH, TN, TX, UT) use new district maps starting January 3, 2027.
-Current members of Congress from the <a href="https://github.com/unitedstates/congress-legislators">congress-legislators</a> project;
-November 3, 2026 results and governors from Wikipedia as of <span id="built"></span>; districts from the US Census Bureau and Wikimedia Commons;
-teams from <a href="https://www.statbotics.io/">Statbotics</a> and <a href="https://www.thebluealliance.com/">The Blue Alliance</a>.</font></p>
+<p>Matches are for fun and say nothing about anyone's politics.</p>
+<p><font size="2">Team records and ratings from <a href="https://www.statbotics.io/">Statbotics</a>;
+teams and locations from <a href="https://www.thebluealliance.com/">The Blue Alliance</a>; hometown size from the US Census Bureau.</font></p>
 
 <hr>
 <center>
@@ -127,7 +114,7 @@ function famousLink(id) {
 
 function showTeam(r) {
   history.replaceState(null, "", "#" + r.t);
-  const [best, ...alts] = r.fm, p = DATA.people[best[0]], S = DATA.states[r.s];
+  const [best, ...alts] = r.fm, p = DATA.people[best[0]];
   let h = `<hr><center><h2>Team ${r.t} &middot; ${esc(r.nk)}</h2><i>${esc(r.c)}, ${esc(r.s)}</i>
   <p><table border="1" cellpadding="8" cellspacing="0" class="wide match">
   <tr bgcolor="#C0C0C0"><th>Famous Match</th></tr>
@@ -145,26 +132,6 @@ function showTeam(r) {
       `<li>${famousLink(a[0])} &mdash; ${esc(a[1])}</li>`).join("")}</ul></font></td></tr>`;
   h += `</table></center>`;
 
-  // ---- real officials
-  const rows = [];
-  const cds = r.cd || [];
-  if (cds.length) {
-    const nowCd = cds.map(([d, pct]) => who(S.house[d], cds.length > 1 ? ` <font size="2">&middot; ${distName(r.s, d)}, ${pct}% of the ZIP</font>` : ` <font size="2">&middot; ${distName(r.s, d)}</font>`)).join("<br>");
-    const d27 = r.cd27 ?? cds[0][0];
-    const w = S.house27[d27];
-    let next = typeof w === "string" && DATA.people[w] ? who(w) : later(w === undefined ? null : w);
-    if (S.redrawn) next += ` <font size="2">&middot; new map, ${distName(r.s, d27)}</font>`;
-    else if (cds.length > 1) next += ` <font size="2">&middot; ${distName(r.s, d27)}</font>`;
-    rows.push([r.s === "DC" ? "Delegate" : r.s === "PR" ? "Resident Commissioner" : "U.S. House", nowCd, next]);
-  } else rows.push(["U.S. House", '<span class="quiet">Unknown (no location on file)</span>', ""]);
-  S.sen.forEach((id, i) => rows.push(["U.S. Senate", who(id), later(S.sen27[i], id)]));
-  if (S.gov) rows.push(["Governor", who(S.gov), later(S.gov27, S.gov)]);
-  h += `<center><h3>Your Officials</h3><div class="scroll"><table border="1" cellpadding="4" cellspacing="0" class="wide">
-  <tr bgcolor="#C0C0C0"><th>Office</th><th>Now</th><th>From January 2027</th></tr>
-  ${rows.map(x => `<tr><td>${x[0]}</td><td>${x[1]}</td><td>${x[2]}</td></tr>`).join("")}
-  </table></div>
-  <font size="2">${r.how === "city" ? "No ZIP on file, so the district is estimated from the city." : ""}
-  ${S.redrawn ? r.s + " has a new district map starting in 2027." : ""}</font></center>`;
   $("out").innerHTML = h;
 }
 
@@ -220,21 +187,11 @@ function fromHash() {
   else if (h.startsWith("p=") && DATA.people[h.slice(2)]) showPerson(h.slice(2));
 }
 
-function board() {
-  const n = {};
-  DATA.teams.forEach(r => n[r.fm[0][0]] = (n[r.fm[0][0]] || 0) + 1);
-  const top = Object.entries(n).sort((a, b) => b[1] - a[1]).slice(0, 15);
-  $("board").innerHTML = `<tr bgcolor="#C0C0C0"><th>Rank</th><th>Politician</th><th>Teams</th></tr>` +
-    top.map(([id, c], i) => `<tr><td align="right">${i + 1}</td><td>${famousLink(id)}</td><td align="right">${c}</td></tr>`).join("");
-}
-
-fetch("data.json", { cache: "no-cache" }).then(r => r.json()).then(d => {
+fetch("data.json?v=" + Math.floor(Date.now() / 300000), { cache: "no-cache" }).then(r => r.json()).then(d => {
   DATA = d;
   d.teams.forEach(r => BY_NUM[r.t] = r);
   $("status").textContent = `${d.teams.length.toLocaleString()} teams on file.`;
-  $("built").textContent = new Date(d.built + "T12:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
   $("npeople").textContent = Object.keys(d.people).filter(id => id.startsWith("f_")).length;
-  board();
   fromHash();
   window.addEventListener("hashchange", fromHash);
 }).catch(e => $("status").textContent = "Couldn't load the team list: " + e);
