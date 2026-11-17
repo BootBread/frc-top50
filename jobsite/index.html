@@ -26,6 +26,15 @@
   .panel kbd { background: rgba(255,255,255,.18); border-radius: 4px; padding: 1px 6px; font-family: inherit; font-size: 12px; }
   #tasks button { margin-top: 8px; font: inherit; font-size: 12px; padding: 4px 10px; border: 0; border-radius: 6px; background: rgba(255,255,255,.16); color: #fff; cursor: pointer; }
   @media (max-width: 1000px) { #hint { top: auto; bottom: 268px; max-width: 88vw; } }
+  #custom { top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; max-width: min(640px, 94vw); user-select: none; }
+  #custom .crow { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; padding: 5px 6px; border-radius: 8px; }
+  #custom .crow.sel { background: rgba(255,201,40,.16); }
+  #custom .lab { width: 104px; font-weight: 600; font-size: 13px; }
+  #custom button { font: inherit; border: 2px solid transparent; border-radius: 7px; background: rgba(255,255,255,.08); color: #fff; padding: 2px; cursor: pointer; }
+  #custom button.on { border-color: #ffc928; }
+  #custom .sw { display: inline-block; width: 26px; height: 20px; border-radius: 4px; vertical-align: middle; }
+  #custom .sw.crew { width: 40px; font-size: 11px; line-height: 20px; text-align: center; color: #1b1f24; font-weight: 700; }
+  #custom .txt { display: inline-block; padding: 1px 8px; font-size: 13px; }
   #help { bottom: 14px; right: 14px; font-size: 13px; color: #dfe5ec; }
   #help kbd { background: rgba(255,255,255,.16); border-radius: 4px; padding: 1px 6px; font-family: inherit; font-size: 12px; }
   #banner { top: 22%; left: 50%; transform: translateX(-50%); text-align: center; font-size: 20px; padding: 18px 30px; display: none; }
@@ -58,7 +67,7 @@
   <kbd>&uarr;</kbd><kbd>&darr;</kbd> raise / lower arms (lower into the ground to dig)<br>
   <kbd>&larr;</kbd><kbd>&rarr;</kbd> curl / dump bucket<br>
   <kbd>E</kbd> winch hook / unhook &nbsp; <kbd>Q</kbd><kbd>X</kbd> reel in / out<br>
-  <kbd>F</kbd> switch vehicle (garage or purple yard)<br>
+  <kbd>F</kbd> switch vehicle (garage or purple yard) &nbsp; <kbd>G</kbd> paint shop (garage)<br>
   <kbd>R</kbd> reset &nbsp; <kbd>C</kbd> recenter camera &nbsp; <kbd>H</kbd> hints<br>
   Drag mouse to look, wheel to zoom
 </div>
@@ -66,6 +75,7 @@
 <div id="hint" class="panel"></div>
 <div id="prompt" class="panel"></div>
 <div id="banner" class="panel"></div>
+<div id="custom" class="panel"></div>
 <div id="start" class="panel">
   <h1>Job Site</h1>
   <p>Wheel loaders with winches. Meet your crew in the quarry, then drive into a job house to start a level.</p>

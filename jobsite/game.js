@@ -715,6 +715,92 @@ const spawnAt = (slot) => {
   return { x: site0.x + off * c, z: site0.z - off * s, yaw: site0.yaw };
 };
 
+// ---------- paint jobs ----------
+const PAINTS = [0xf2b21c, 0xe2572b, 0xd8333a, 0xff7ab8, 0x8a4fd1, 0x3b8fe0, 0x2fc4c4, 0x52b45a, 0xa6e22e, 0xf2f2ee, 0x9aa3ad, 0x22262c];
+const PAINT_NAMES = ["Yellow", "Orange", "Red", "Pink", "Purple", "Blue", "Teal", "Green", "Lime", "White", "Silver", "Black"];
+const STRIPES = ["None", "Centre stripe", "Twin stripes"];
+const FLAMES = ["None", "Sides", "Hood", "Sides and hood"];
+const FLAME_SETS = [
+  { name: "Classic", c: ["#fff3a0", "#ffb21f", "#e8461a"] }, { name: "Blue", c: ["#e6f7ff", "#59c1ff", "#1d52d9"] },
+  { name: "Green", c: ["#f0ffc4", "#8ee34f", "#1f8a2e"] }, { name: "White", c: ["#ffffff", "#dfe3e8", "#9aa3ad"] },
+  { name: "Purple", c: ["#ffe1ff", "#d27bff", "#6a2bd1"] },
+];
+const DEFAULT_LOOK = { p: -1, s: 0, sc: 9, f: 0, fc: 0 };       // p -1: the crew colour of your room slot
+const flameTex = [];
+// Flame decal: tongues of fire that start at the left edge (the front) and lick back to the right.
+function getFlameTex(i) {
+  if (flameTex[i]) return flameTex[i];
+  const W2 = 512, H2 = 192, cv = document.createElement("canvas"); cv.width = W2; cv.height = H2;
+  const g = cv.getContext("2d"), lens = [0.72, 0.98, 0.82, 1.0, 0.76], n = lens.length;
+  const layer = (color, k, grow) => {
+    g.fillStyle = color;
+    g.fillRect(0, H2 * 0.08, W2 * 0.12 * k, H2 * 0.84);               // a solid band where the tongues start
+    for (let t = 0; t < n; t++) {
+      const yc = H2 * (0.16 + (0.68 * t) / (n - 1)), len = W2 * lens[t] * k, h = H2 * 0.34 * grow;
+      g.beginPath();
+      g.moveTo(0, yc - h * 0.6);
+      g.bezierCurveTo(len * 0.4, yc - h * 0.8, len * 0.72, yc - h * 0.05, len, yc - h * 0.4);
+      g.bezierCurveTo(len * 0.8, yc + h * 0.12, len * 0.5, yc + h * 0.6, 0, yc + h * 0.62);
+      g.closePath(); g.fill();
+    }
+  };
+  const c = FLAME_SETS[i].c;
+  g.strokeStyle = "rgba(20,20,24,0.55)"; g.lineWidth = 10; g.lineJoin = "round";      // a dark outline so flames read on any paint
+  layer("rgba(20,20,24,0.55)", 1.03, 1.08);
+  layer(c[2], 1, 1); layer(c[1], 0.76, 0.78); layer(c[0], 0.48, 0.55);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  return (flameTex[i] = tex);
+}
+const cleanLook = (a) => {
+  const L2 = Array.isArray(a) ? a : [];
+  const n = (v, lo, hi, d) => (Number.isInteger(v) && v >= lo && v <= hi ? v : d);
+  return { p: n(L2[0], -1, PAINTS.length - 1, -1), s: n(L2[1], 0, 2, 0), sc: n(L2[2], 0, PAINTS.length - 1, 9), f: n(L2[3], 0, 3, 0), fc: n(L2[4], 0, FLAME_SETS.length - 1, 0) };
+};
+const lookArr = (k) => [k.p, k.s, k.sc, k.f, k.fc];
+// show the look on a vehicle: paint, stripes and flames, for whichever kind it is right now
+function applyLook(ld, look) {
+  ld.look = { ...look };
+  ld.paint.color.set(look.p >= 0 ? PAINTS[look.p] : COLORS[ld.slot]);
+  ld.decor.stripeMat.color.set(PAINTS[look.sc]);
+  ld.decor.flameMat.map = getFlameTex(look.fc); ld.decor.flameMat.needsUpdate = true;
+  showDecor(ld);
+}
+function showDecor(ld) {
+  const k = ld.look || DEFAULT_LOOK, d = ld.decor;
+  for (const m of d.single) m.visible = m.userData.kind === ld.kind && k.s === 1;
+  for (const m of d.twin) m.visible = m.userData.kind === ld.kind && k.s === 2;
+  for (const m of d.sides) m.visible = m.userData.kind === ld.kind && (k.f & 1) > 0;
+  for (const m of d.hood) m.visible = m.userData.kind === ld.kind && (k.f & 2) > 0;
+}
+// where the decals go on each kind of vehicle
+const DECOR = {
+  loader: { side: { x: 1.012, y: 0.56, z: -1.3, len: 2.26, h: 0.78 }, hood: { y: 0.957, z: -1.62, len: 1.6, w: 1.8 },
+    stripes: [[0.962, -1.625, 1.65], [1.948, -0.15, 1.45], [0.407, 0.9, 2.0]] },
+  roller: { side: { x: 0.962, y: 0.5, z: -0.75, len: 2.55, h: 0.7 }, hood: { y: 0.857, z: -1.62, len: 0.8, w: 1.7 },
+    stripes: [[0.862, -1.625, 0.85], [2.128, -0.55, 1.5], [0.862, 0.33, 0.45]] },
+};
+function buildDecor(group) {
+  const d = { stripeMat: lam(0xf2f2ee), single: [], twin: [], sides: [], hood: [],
+    flameMat: new THREE.MeshLambertMaterial({ map: getFlameTex(0), transparent: true, alphaTest: 0.35, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }) };
+  const add = (kind, mesh, list) => { mesh.visible = false; mesh.userData.kind = kind; group.add(mesh); list.push(mesh); };
+  for (const kind of ["loader", "roller"]) {
+    const D = DECOR[kind];
+    for (const [y, z, len] of D.stripes) {
+      const one = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.012, len), d.stripeMat); one.position.set(0, y, z); add(kind, one, d.single);
+      for (const sx of [-0.32, 0.32]) { const two = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.012, len), d.stripeMat); two.position.set(sx, y, z); add(kind, two, d.twin); }
+    }
+    for (const e of [1, -1]) {
+      const geo = new THREE.PlaneGeometry(D.side.len, D.side.h);
+      if (e < 0) geo.scale(-1, 1, 1);
+      geo.rotateY((e * Math.PI) / 2);
+      const m = new THREE.Mesh(geo, d.flameMat); m.position.set(e * D.side.x, D.side.y, D.side.z); add(kind, m, d.sides);
+    }
+    const hg = new THREE.PlaneGeometry(D.hood.len, D.hood.w).rotateX(-Math.PI / 2).rotateY(Math.PI / 2);
+    const hm = new THREE.Mesh(hg, d.flameMat); hm.position.set(0, D.hood.y, D.hood.z); add(kind, hm, d.hood);
+  }
+  return d;
+}
+
 function makeLoader(slot, local) {
   const paint = lam(COLORS[slot]);
   const group = new THREE.Group(); scene.add(group);
@@ -776,18 +862,24 @@ function makeLoader(slot, local) {
     const mark = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, 0.12, 0.4), dark); mark.position.y = 0.81; d.add(mark);
     return d;
   });
-  return { slot, paint, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, loadG: 0, roll: 0,
-    kind: "loader", vis: { loader: loaderVis, roller: rollerVis }, drums };
+  const decor = buildDecor(group);
+  const ld = { slot, paint, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, loadG: 0, roll: 0,
+    kind: "loader", vis: { loader: loaderVis, roller: rollerVis }, drums, decor, look: { ...DEFAULT_LOOK } };
+  return ld;
 }
 function setKind(ld, kind) {
   if (!KINDS[kind] || ld.kind === kind) return;
   ld.kind = kind;
   for (const k in ld.vis) for (const m of ld.vis[k]) m.visible = k === kind;
   for (const c of ld.bucketColliders) c.setEnabled(kind === "loader");
+  showDecor(ld);
 }
 function disposeLoader(ld) { world.removeRigidBody(ld.body); scene.remove(ld.group); }
 
 const me = makeLoader(0, true);
+let myLook = { ...DEFAULT_LOOK };
+try { myLook = cleanLook(JSON.parse(localStorage.getItem("jobsite-look") || "null")); } catch {}
+applyLook(me, myLook);
 const chassis = me.body;
 // Places to change vehicle: the garage in the quarry, and a vehicle yard near the start of each job.
 const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 } }[SITE] || null;
@@ -1233,8 +1325,13 @@ function setRoster(list) {
   }
   for (const [id, peer] of net.peers) if (!list.some((p) => p.id === id)) { disposeLoader(peer.loader); net.peers.delete(id); }
   if (SITE === "farm" && list.length) setActiveBoulders(Math.max(activeBoulders, 5 * list.length));     // five boulders per player
+  renderRoster();
+}
+// the colour chip next to each name matches that player's paint job
+function renderRoster() {
   elRoster.style.display = net.online ? "block" : "none";
-  elRoster.innerHTML = `<h2>Room ${net.room}</h2>` + list.map((p) => `<div><i style="background:#${COLORS[p.slot].toString(16).padStart(6, "0")}"></i>${esc(p.name)}${p.id === net.id ? " (you)" : ""}${p.id === net.hostId ? " &#9733;" : ""}</div>`).join("");
+  const chip = (p) => { const ld = p.id === net.id ? me : net.peers.get(p.id) && net.peers.get(p.id).loader; return ld ? ld.paint.color.getHexString() : COLORS[p.slot].toString(16).padStart(6, "0"); };
+  elRoster.innerHTML = `<h2>Room ${net.room}</h2>` + net.roster.map((p) => `<div><i style="background:#${chip(p)}"></i>${esc(p.name)}${p.id === net.id ? " (you)" : ""}${p.id === net.hostId ? " &#9733;" : ""}</div>`).join("");
 }
 function send(m) { if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(m)); }
 
@@ -1256,7 +1353,7 @@ function connect(room, name) {
         if (d.site && d.site !== SITE) { location.replace(`?site=${d.site}&room=${room}`); return; }     // the crew is on another site: go there
         Object.assign(net, { ws, id: d.id, online: true, room });
         if (d.progress) { try { progress = JSON.parse(d.progress) || {}; } catch {} }
-        me.slot = d.slot; me.paint.color.set(COLORS[d.slot]);
+        me.slot = d.slot; applyLook(me, myLook);
         const s = spawnAt(d.slot); placeLoader(s.x, s.z, s.yaw);
         if (d.save && d.roster.length === 1) { try { applySync(JSON.parse(d.save)); } catch {} }
         setRoster(d.roster);
@@ -1278,6 +1375,10 @@ function onPeerMessage(from, m) {
   peer.pos.set(m.p[0], m.p[1], m.p[2]);
   peer.h = Array.isArray(m.h) ? m.h : null;
   setKind(peer.loader, m.k === 1 ? "roller" : "loader");
+  if (Array.isArray(m.lk)) {
+    const key = m.lk.join(",");
+    if (key !== peer.lookKey) { peer.lookKey = key; applyLook(peer.loader, cleanLook(m.lk)); renderRoster(); }
+  }
   if (m.fl) for (let f = 1; f <= 64; f <<= 1) if (m.fl & f) setFlag(f);
   if (SITE === "farm" && m.nb > activeBoulders) setActiveBoulders(m.nb);
   if (Array.isArray(m.gv)) for (const g of m.gv) markCrushed(g);
@@ -1330,6 +1431,7 @@ function sendState() {
   const m = { t: "s", p: [r3(t.x), r3(t.y), r3(t.z)], q: [r3(q.x), r3(q.y), r3(q.z), r3(q.w)], a: r3(me.arm), b: r3(me.tilt), w: r3(me.steer), l: r3(me.load), v: r3(me.speed), k: me.kind === "roller" ? 1 : 0 };
   if (winch.on) m.h = [winch.kind, winch.ref, r3(winch.local.x), r3(winch.local.y), r3(winch.local.z), r3(winch.len), Math.round(winch.T)];
   if (flags) m.fl = flags;
+  if (lookDirty || stepCount % 60 === 0) { m.lk = lookArr(myLook); lookDirty = false; }     // paint job: when it changes, and every second for newcomers
   if (SITE === "farm") m.nb = activeBoulders;
   if (gravel.length) m.gv = gravel;
   if (rk.length) m.r = rk;
@@ -1398,12 +1500,56 @@ const keys = new Set();
 const CAM_PITCH = 0.62, CAM_DIST = 19;
 const cam = { yaw: 0, offset: 0, pitch: CAM_PITCH, dist: CAM_DIST, drag: false };
 let hintsOn = true;
+// ---------- paint shop (in the quarry garage) ----------
+let customOpen = false, customRow = 0, lookDirty = false;
+const elCustom = document.getElementById("custom");
+const LOOK_ROWS = [
+  { key: "p", label: "Paint", opts: [-1, ...PAINTS.keys()] },
+  { key: "s", label: "Stripes", opts: [0, 1, 2] },
+  { key: "sc", label: "Stripe colour", opts: [...PAINTS.keys()] },
+  { key: "f", label: "Flames", opts: [0, 1, 2, 3] },
+  { key: "fc", label: "Flame colours", opts: [...FLAME_SETS.keys()] },
+];
+const hex = (c) => "#" + c.toString(16).padStart(6, "0");
+function optHtml(row, v) {
+  if (row.key === "p") return v < 0 ? `<span class="sw crew" style="background:${hex(COLORS[me.slot])}" title="Crew colour">crew</span>` : `<span class="sw" style="background:${hex(PAINTS[v])}" title="${PAINT_NAMES[v]}"></span>`;
+  if (row.key === "sc") return `<span class="sw" style="background:${hex(PAINTS[v])}" title="${PAINT_NAMES[v]}"></span>`;
+  if (row.key === "fc") { const c = FLAME_SETS[v].c; return `<span class="sw" style="background:linear-gradient(90deg,${c[2]},${c[1]},${c[0]})" title="${FLAME_SETS[v].name}"></span>`; }
+  return `<span class="txt">${(row.key === "s" ? STRIPES : FLAMES)[v]}</span>`;
+}
+function renderCustom() {
+  elCustom.innerHTML = `<h2>Paint shop</h2>` + LOOK_ROWS.map((row, r) => `<div class="crow ${r === customRow ? "sel" : ""}"><span class="lab">${row.label}</span>${row.opts
+    .map((v) => `<button data-r="${r}" data-v="${v}" class="${myLook[row.key] === v ? "on" : ""}">${optHtml(row, v)}</button>`).join("")}</div>`).join("")
+    + `<div class="sub">${pad.on ? `<kbd>D-pad</kbd> choose &nbsp; <kbd>A</kbd> done` : `<kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd> or click to choose &nbsp; <kbd>G</kbd> done`}</div>`;
+}
+function setLook(key, v) {
+  myLook = { ...myLook, [key]: v };
+  applyLook(me, myLook);
+  try { localStorage.setItem("jobsite-look", JSON.stringify(lookArr(myLook))); } catch {}
+  lookDirty = true;
+  if (net.online) renderRoster();
+  renderCustom();
+}
+function stepLook(dir) {
+  const row = LOOK_ROWS[customRow], i = row.opts.indexOf(myLook[row.key]);
+  setLook(row.key, row.opts[(i + dir + row.opts.length) % row.opts.length]);
+}
+function openCustom() {
+  if (switchPad() !== "garage" || Math.abs(me.speed) > 2) return;
+  customOpen = true; elCustom.style.display = "block"; renderCustom();
+}
+function closeCustom() { customOpen = false; elCustom.style.display = "none"; }
+elCustom.addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  customRow = +b.dataset.r; setLook(LOOK_ROWS[customRow].key, +b.dataset.v);
+});
 // ---------- controller ----------
 // Standard (Xbox-style) layout. Left stick steers, triggers drive, bumpers move the arms,
 // X / B curl and dump, A brakes, Y hooks the winch, D-pad up / down reels, right stick looks around.
 const pad = { on: false, prev: [], rx: 0, ry: 0 };
 const PAD_LABEL = { KeyW: "RT", KeyS: "LT", KeyA: "Left stick", KeyD: "", Space: "A", ArrowUp: "RB", ArrowDown: "LB", ArrowLeft: "X", ArrowRight: "B",
-  KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyR: "View", KeyC: "R3", KeyH: "Menu" };
+  KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyG: "D-pad &larr;", KeyR: "View", KeyC: "R3", KeyH: "Menu" };
 function readPad() {
   const list = navigator.getGamepads ? navigator.getGamepads() : [];
   let gp = null;
@@ -1417,6 +1563,13 @@ function readPad() {
   const hit = (i) => b(i) > 0.5 && !(pad.prev[i] > 0.5);
   if (pad.on) {
     if (elStart.style.display !== "none") { if (hit(0)) begin(); }
+    else if (customOpen) {
+      if (hit(12)) { customRow = (customRow + LOOK_ROWS.length - 1) % LOOK_ROWS.length; renderCustom(); }
+      if (hit(13)) { customRow = (customRow + 1) % LOOK_ROWS.length; renderCustom(); }
+      if (hit(14)) stepLook(-1);
+      if (hit(15)) stepLook(1);
+      if (hit(0) || hit(1)) closeCustom();
+    } else if (hit(14) && switchPad() === "garage") openCustom();
     else {
       if (hit(3)) toggleWinch();
       if (hit(15)) switchVehicle();
@@ -1437,6 +1590,7 @@ function readKeys() {
   input.arm = k("ArrowUp") - k("ArrowDown");
   input.tilt = k("ArrowLeft") - k("ArrowRight");
   input.reel = k("KeyQ") - k("KeyX");
+  if (customOpen) { input.fwd = input.turn = input.arm = input.tilt = input.reel = 0; input.brake = 1; return; }    // parked in the paint shop
   const g = padState;
   if (g && pad.on) {
     input.fwd = clamp(input.fwd + g.b(7) - g.b(6), -1, 1);
@@ -1452,12 +1606,22 @@ function toggleHints() { hintsOn = !hintsOn; elHint.style.display = hintsOn && e
 addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT") return;
   if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+  if (customOpen) {
+    if (e.code === "ArrowUp") { customRow = (customRow + LOOK_ROWS.length - 1) % LOOK_ROWS.length; renderCustom(); }
+    else if (e.code === "ArrowDown") { customRow = (customRow + 1) % LOOK_ROWS.length; renderCustom(); }
+    else if (e.code === "ArrowLeft") stepLook(-1);
+    else if (e.code === "ArrowRight") stepLook(1);
+    else if (["KeyG", "Enter", "Escape"].includes(e.code) && !e.repeat) closeCustom();
+    if (pad.on) { pad.on = false; refreshHelp(); renderCustom(); }
+    return;
+  }
   if (e.repeat) return;
   keys.add(e.code);
   if (e.code === "KeyR") resetLoader();
   if (e.code === "KeyC") { cam.offset = 0; cam.pitch = CAM_PITCH; cam.dist = CAM_DIST; }
   if (e.code === "KeyE" && running) toggleWinch();
   if (e.code === "KeyF" && running) switchVehicle();
+  if (e.code === "KeyG" && running) openCustom();
   if (e.code === "KeyH") toggleHints();
   if (pad.on) { pad.on = false; refreshHelp(); }          // back on the keyboard: show keyboard keys again
 });
@@ -1481,7 +1645,7 @@ let bannerTimer = 0;
 function showBanner(html, ms) { elBanner.innerHTML = html; elBanner.style.display = "block"; clearTimeout(bannerTimer); bannerTimer = setTimeout(() => { elBanner.style.display = "none"; }, ms); }
 elTasks.addEventListener("click", (e) => { if (e.target.id === "leave") goSite("hub"); });
 const row = (ok, text, cls = "") => `<div class="${cls} ${ok ? "done" : ""}">${ok ? "&#10003;" : "&#9675;"} ${text}</div>`;
-const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", R: "KeyR", H: "KeyH", C: "KeyC", Space: "Space",
+const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", G: "KeyG", R: "KeyR", H: "KeyH", C: "KeyC", Space: "Space",
   "&uarr;": "ArrowUp", "&darr;": "ArrowDown", "&larr;": "ArrowLeft", "&rarr;": "ArrowRight" };
 const K = (k) => { const t = pad.on && KEY_CODE[k] ? PAD_LABEL[KEY_CODE[k]] : k; return t ? `<kbd>${t}</kbd>` : ""; };
 const elHelp = document.getElementById("help"), HELP_KEYS = elHelp.innerHTML;
@@ -1490,8 +1654,10 @@ function refreshHelp() {
     <kbd>Left stick</kbd> steer &nbsp; <kbd>RT</kbd> drive &nbsp; <kbd>LT</kbd> reverse &nbsp; <kbd>A</kbd> brake<br>
     <kbd>RB</kbd><kbd>LB</kbd> raise / lower arms &nbsp; <kbd>X</kbd><kbd>B</kbd> curl / dump<br>
     <kbd>Y</kbd> winch hook / unhook &nbsp; <kbd>D-pad &uarr;</kbd><kbd>&darr;</kbd> reel in / out<br>
-    <kbd>D-pad &rarr;</kbd> switch vehicle &nbsp; <kbd>View</kbd> reset &nbsp; <kbd>Menu</kbd> hints<br>
-    <kbd>Right stick</kbd> look &nbsp; <kbd>R3</kbd> recenter camera`;
+    <kbd>D-pad &rarr;</kbd> switch vehicle &nbsp; <kbd>D-pad &larr;</kbd> paint shop (garage)<br>
+    <kbd>View</kbd> reset &nbsp; <kbd>Menu</kbd> hints &nbsp; 
+<kbd>Right stick</kbd> look &nbsp; <kbd>R3</kbd> recenter`;
+  if (customOpen) renderCustom();
   elHint.dataset.h = ""; elPrompt.dataset.h = "\u0000";       // redraw hint and prompt with the right labels
 }
 function setHint(html) {
@@ -1763,7 +1929,7 @@ function checkHub() {
   const rows = houses.map((hs) => {
     const p = progress[hs.id];
     const lk = isLocked(hs);
-    if (hs.garage) return `<div class="sub">&#128295; Garage: switch vehicle with ${K("F")}${rollerUnlocked() ? "" : " (road roller unlocks after job 1)"}</div>`;
+    if (hs.garage) return `<div class="sub">&#128295; Garage: switch vehicle with ${K("F")}, paint shop with ${K("G")}${rollerUnlocked() ? "" : " (road roller unlocks after job 1)"}</div>`;
     return `<div class="${p && p.done ? "done" : lk ? "sub" : ""}">${p && p.done ? "&#9733;" : lk ? "&#128274;" : "&#9675;"} ${hs.title}${p && p.done ? ` (${clock(p.best)})` : lk ? " (locked)" : ""}</div>`;
   }).join("");
   elTasks.innerHTML = `<h2>Quarry yard</h2><div class="sub">Drive into a house and stop to start a job.</div>${rows}<div class="sub" style="margin-top:6px">The rest of the quarry is a playground: dig, dump and push rocks anywhere.</div>`;
@@ -1883,7 +2049,9 @@ function syncVisuals(dt, now = performance.now()) {
     const strain = winch.T / WINCH.tmax;
     pr = `Winch on <b>${winch.name}</b> &middot; rope ${winch.len.toFixed(0)} m ${strain > 0.95 ? '<span class="hot">&middot; full power</span>' : strain > 0.05 ? "&middot; pulling" : ""}<br>${K("Q")} reel in &nbsp; ${K("X")} let out &nbsp; ${K("E")} unhook`;
   } else if (target && running) pr = `${K("E")} hook winch to <b>${target.name}</b> (${target.dist.toFixed(0)} m)`;
-  if (padNow && running) pr += `${pr ? "<br>" : ""}${K("F")} switch to the <b>${KINDS[me.kind === "loader" ? "roller" : "loader"].name}</b>${me.kind === "loader" && !rollerUnlocked() ? " (locked)" : ""}`;
+  if (padNow && running && !customOpen) pr += `${pr ? "<br>" : ""}${K("F")} switch to the <b>${KINDS[me.kind === "loader" ? "roller" : "loader"].name}</b>${me.kind === "loader" && !rollerUnlocked() ? " (locked)" : ""}`;
+  if (padNow === "garage" && running && !customOpen) pr += `<br>${K("G")} paint shop`;
+  if (customOpen && padNow !== "garage") closeCustom();
   if (elPrompt.dataset.h !== pr) { elPrompt.dataset.h = pr; elPrompt.innerHTML = pr; elPrompt.style.display = pr ? "block" : "none"; }
 }
 
@@ -1948,7 +2116,7 @@ else if (params.get("solo")) begin();
 
 // hooks for automated checks
 window.__game = { SITE, world, chassis, vehicle, props, anchors, boulders, logs, stump: () => stump, tractor: () => tractor, input, me, job, L, WINCH, FARM, HUB, net, winch, heights, heightAt, mudAt, slopeAt,
-  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, RIDGE, ridgeRoad, cabin: () => cabin, firewood: () => firewood, ridgeRocks, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
+  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, openCustom, closeCustom, setLook, stepLook, get myLook() { return myLook; }, get customOpen() { return customOpen; }, applyLook, cleanLook, RIDGE, ridgeRoad, cabin: () => cabin, firewood: () => firewood, ridgeRocks, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
   get flags() { return flags; }, FL, parts, get target() { return target; }, get grip() { return gripNow; },
   run(steps, set = {}) { Object.assign(input, set); for (let i = 0; i < steps; i++) physicsStep(); syncVisuals(DT); target = !winch.on ? findTarget() : null; siteCheck(); },
   render() { renderer.render(scene, camera); } };
