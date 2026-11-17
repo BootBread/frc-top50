@@ -225,7 +225,8 @@ const FLOOD = {
   riprap: [[-33, 27, 1.0], [-40, 27.5, 0.95], [-2, 27, 1.05], [6, 27.5, 1.0], [42, 27, 1.0], [61, 27.5, 1.05]],
   // an empty pasture west of the town, behind its own bank: dig through the levee there to let the river in
   pasture: { x0: -88, x1: -59, z0: -24, z1: 17, floor: -0.8 }, berm: { x: -54, half: 4.5, h: 4.2 }, spill: { x0: -76, x1: -61 },
-  cars: [{ at: 0.08, color: 0x3b8fe0, name: "Minston and Tinston's car", cans: true }, { at: 0.28, color: 0xd8333a, name: "red car" }, { at: 0.48, color: 0x52b45a, name: "green car" }],
+  // the cars are already in the river when the job starts, stranded in the shallows until the water lifts them
+  cars: [{ at: 0, x: -44, color: 0x3b8fe0, name: "Minston and Tinston's car", cans: true }, { at: 0, x: -60, color: 0xd8333a, name: "red car" }, { at: 0, x: -72, color: 0x52b45a, name: "green car" }],
   weir: 72, carStart: { x: -58, z: 34 },
   homes: [[-40, -30, 1], [-14, -38, 1], [14, -30, 1], [42, -38, 1], [-34, -60, 1], [62, -50, 1], [12, -66, 1], [64, -16, 1]],
   water: { start: -2.0, peak: 2.0, riseSolo: 1080, hold: 40, grace: 45 },      // starts low, rises faster
@@ -238,7 +239,9 @@ function floodDesign(x, z) {
   h += 1.4 * smooth(12, -70, z);                                                                 // the town rises gently away from the river: fields flood first
   h = lerp(h, 0.0, smooth(18, 26, z));                                                           // floodplain
   h -= 2.6 * smooth(30, 38, z);                                                                  // river channel
-  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  h += 5.2 * smooth(50, 60, z);                                                                  // the far bank: it's a river, not a lake
+  const inChannel = smooth(26, 31, z) * smooth(58, 52, z);                                       // where the river runs off both ends of the map
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12 * (1 - inChannel * smooth(70, 80, Math.abs(x)));
   const Pa = F.pasture, inPa = Math.min(x - Pa.x0, Pa.x1 - x, z - Pa.z0, Pa.z1 - z);
   h = lerp(h, Pa.floor, smooth(-4, 3, inPa));                                                    // the low pasture
   const berm = smooth(F.berm.half, F.berm.half - 2, Math.abs(x - F.berm.x)) * smooth(L2.z + 1, L2.z - 3, z) * smooth(Pa.z0 - 6, Pa.z0, z);
@@ -1072,6 +1075,13 @@ if (SITE === "flood") {
   breachBeams[3].visible = false;
   if (F.gate) { const gm = marker(F.gate.x, F.levee.z, 0.5, 0xffa23a); gm.ring.visible = false; breachBeams.push(gm.beam); }
   lowBeam = marker(0, F.levee.z, 0.5, 0xff4a3a).beam; lowBeam.visible = false;
+  // painted backdrops at both ends of the river, like a scenery flat: the river carries on into the distance
+  for (const side of [-1, 1]) {
+    const cv = document.createElement("canvas"); cv.width = 1024; cv.height = 512; paintRiverFlat(cv.getContext("2d"), side);
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+    const flat = new THREE.Mesh(new THREE.PlaneGeometry(70, 35), new THREE.MeshBasicMaterial({ map: tex, fog: false }));
+    flat.position.set(side * 95, 13.5, 41); flat.rotation.y = -side * Math.PI / 2; scene.add(flat);
+  }
   // places from earlier jobs, across the river: Dinston's barn and the wedding arch
   {
     const barnFar = building({ x: -46, z: 86, w: 10, d: 8, h: 6, door: 4, dh: 3.5, face: -1, wall: 0xa8392c, roof: 0x5b5f66 }); barnFar.sign.userData.draw("Muddle Acres", "Grandma Dinston's", "#ff9cc4");
@@ -1093,6 +1103,34 @@ if (SITE === "flood") {
     c.beam = marker(0, 0, 0.5, 0x5fd0ff).beam; c.beam.visible = false;
     cars.push(c);
   }
+}
+// Paint the far reach of the river onto a canvas: stormy sky, hills, green banks with trees, and the
+// river narrowing to the horizon. side -1 is upstream (west), 1 downstream (east).
+function paintRiverFlat(g, side) {
+  const Wd = 1024, Hd = 512, hz = 236, vx = side > 0 ? 560 : 470;          // horizon and vanishing point
+  const sky = g.createLinearGradient(0, 0, 0, hz); sky.addColorStop(0, "#7d8c98"); sky.addColorStop(1, "#b8c3ca"); g.fillStyle = sky; g.fillRect(0, 0, Wd, hz);
+  g.fillStyle = "rgba(235,240,244,.55)";
+  for (let k = 0; k < 9; k++) { const cx = (k * 137 + side * 60) % Wd, cy = 40 + (k * 53) % 120; g.beginPath(); g.ellipse(cx, cy, 70 + (k % 3) * 30, 16 + (k % 2) * 8, 0, 0, Math.PI * 2); g.fill(); }
+  g.fillStyle = "#7f9483"; g.beginPath(); g.moveTo(0, hz); for (let x = 0; x <= Wd; x += 32) g.lineTo(x, hz - 18 - 14 * Math.sin(x / 90 + side) - 8 * Math.sin(x / 37)); g.lineTo(Wd, hz); g.fill();     // far hills
+  const bank = g.createLinearGradient(0, hz, 0, Hd); bank.addColorStop(0, "#6f8f5a"); bank.addColorStop(1, "#5d8a45"); g.fillStyle = bank; g.fillRect(0, hz, Wd, Hd - hz);
+  // the river: wide at the bottom (where it meets the real one), winding to a point at the horizon
+  const L = [], R = [];
+  for (let k = 0; k <= 24; k++) {
+    const t = k / 24, y = Hd - t * (Hd - hz), half = lerp(330, 6, Math.pow(t, 0.7)), bend = Math.sin(t * 5.5 + (side > 0 ? 0.8 : 2.2)) * 70 * t * (1 - t) * 2;
+    const cx = lerp(Wd / 2, vx, t) + bend; L.push([cx - half, y]); R.push([cx + half, y]);
+  }
+  const water = g.createLinearGradient(0, hz, 0, Hd); water.addColorStop(0, "#9fb8c6"); water.addColorStop(1, "#4f7f95");
+  g.fillStyle = water; g.beginPath(); g.moveTo(...L[0]); for (const p of L) g.lineTo(...p); for (const p of R.reverse()) g.lineTo(...p); g.closePath(); g.fill();
+  g.strokeStyle = "rgba(225,238,245,.35)"; g.lineWidth = 2;                                                         // ripples
+  for (let k = 0; k < 40; k++) { const t = (k * 0.618) % 1, y = Hd - t * (Hd - hz) * 0.95, w = lerp(60, 4, t); const cx = lerp(Wd / 2, vx, t) + Math.sin(t * 5.5 + (side > 0 ? 0.8 : 2.2)) * 70 * t * (1 - t) * 2 + ((k * 97) % 200 - 100) * (1 - t); g.beginPath(); g.moveTo(cx - w, y); g.lineTo(cx + w, y); g.stroke(); }
+  for (let k = 0; k < 70; k++) {                                                                                     // trees along the banks, smaller with distance
+    const t = ((k * 0.381) % 1) * 0.92, y = Hd - t * (Hd - hz), s = lerp(70, 6, t), left = k % 2 === 0;
+    const edge = (left ? L : R.slice().reverse())[Math.round(t * 24)][0], x = edge + (left ? -1 : 1) * (s * 0.8 + ((k * 53) % 60) * (1 - t));
+    g.fillStyle = "#3f6d3a"; g.beginPath(); g.moveTo(x, y - s * 1.6); g.lineTo(x - s * 0.45, y); g.lineTo(x + s * 0.45, y); g.closePath(); g.fill();
+    g.fillStyle = "#6b4a2b"; g.fillRect(x - s * 0.06, y, s * 0.12, s * 0.25);
+  }
+  const fog = g.createLinearGradient(0, hz - 30, 0, hz + 60); fog.addColorStop(0, "rgba(184,195,202,0)"); fog.addColorStop(0.5, "rgba(184,195,202,.45)"); fog.addColorStop(1, "rgba(184,195,202,0)");
+  g.fillStyle = fog; g.fillRect(0, hz - 30, Wd, 90);                                                                 // haze on the horizon
 }
 function lockGate() {
   if (gateCollider || !gatePanel) return;
@@ -2988,8 +3026,9 @@ function floodStep() {
   cars.forEach((c, k) => {
     if (!c.spawned && frac >= c.spec.at) {
       c.spawned = true; c.active = true; c.body.setEnabled(true); c.mesh.visible = true;
-      if (host) { c.body.setTranslation({ x: F.carStart.x, y: Math.max(job.water, heightAt(F.carStart.x, F.carStart.z)) + 0.6, z: F.carStart.z }, true); c.body.setLinvel({ x: 0.6, y: 0, z: 0 }, true); }
-      showBanner(`<b>A car is floating down the river!</b>${c.spec.name}: winch it out before the weir.`, 4500); sfx.splash();
+      const sx = c.spec.x ?? F.carStart.x;
+      if (host) { c.body.setTranslation({ x: sx, y: Math.max(job.water, heightAt(sx, F.carStart.z)) + 0.6, z: F.carStart.z }, true); c.body.setLinvel({ x: 0, y: 0, z: 0 }, true); }
+      if (c.spec.at > 0) { showBanner(`<b>A car is floating down the river!</b>${c.spec.name}: winch it out before the weir.`, 4500); sfx.splash(); }
     }
     const cp0 = c.body.translation();
     c.beam.visible = c.active && !job.marks.has("car" + k) && !job.marks.has("lost" + k); c.beam.position.set(cp0.x, cp0.y + 30, cp0.z);
@@ -3062,7 +3101,7 @@ function checkFlood() {
   const floating = cars.some((c, k) => c.active && !job.marks.has("car" + k) && !job.marks.has("lost" + k));
   let tried = false; try { tried = localStorage.getItem("jobsite-flood-tried") === "1"; } catch {}
   if (job.party != null) h = "";
-  else if (!job.moved) h = `The storm is back and the river is rising behind the levee: about ${Math.round(left / 60)} minutes to the peak. Wind the floodgate shut and plug the breaks (orange beams) above the peak, lowest first! Cars may float past: blue beams.`;
+  else if (!job.moved) h = `The storm is back and the river is rising behind the levee: about ${Math.round(left / 60)} minutes to the peak. Wind the floodgate shut and plug the breaks (orange beams) above the peak, lowest first! Three cars are stuck in the river (blue beams): winch them out before the water carries them over the weir.`;
   else if (margin < 0.35) h = `The river is ${margin.toFixed(2)} m from coming over at <b>${where}</b> (red beam). Get dirt there now!`;
   else if (floating && rescued < cars.length) h = `A car is floating down the river (blue beam)! Stand on the levee, hook it with ${K("E")} and reel it onto dry land before the weir at the east end.`;
   else if (F.gate && job.gateClose < 1) h = winch.on && winch.kind === 2 && winch.ref === wheelAnchor
