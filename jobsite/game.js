@@ -3913,15 +3913,31 @@ function checkSands() {
 
 // ----- Night Shift rules -----
 // The guard truck and the floodlights follow the shared clock, so they're in the same place for everyone.
+// Every lap takes the same time. Every third lap the guard swaps direction (laps 1-3 one way, 4-6 the
+// other, and so on), and on every ninth lap it fakes a switch at its first corner: it swings right round,
+// holds, then turns back and carries on the way it was going. Still a fixed pattern you can learn.
 function guardAt(t) {
-  const G2 = NIGHT.guard, P = G2.path, legs = P.map((p, k) => { const q = P[(k + 1) % P.length]; return Math.hypot(q[0] - p[0], q[1] - p[1]) / G2.speed; });
-  const cycle = legs.reduce((a, b) => a + b, 0) + G2.pause * P.length;
-  let r = t % cycle;
+  const G2 = NIGHT.guard, P0 = G2.path;
+  const legsOf = (P) => P.map((p, k) => { const q = P[(k + 1) % P.length]; return Math.hypot(q[0] - p[0], q[1] - p[1]) / G2.speed; });
+  const cycle = legsOf(P0).reduce((a, b) => a + b, 0) + G2.pause * P0.length;
+  const lap = Math.floor(t / cycle), reversed = Math.floor(lap / 3) % 2 === 1, fake = (lap + 1) % 9 === 0;
+  const P = reversed ? [P0[0], ...P0.slice(1).reverse()] : P0, legs = legsOf(P);
+  let r = t - lap * cycle;
   for (let k = 0; k < P.length; k++) {
     const p = P[k], q = P[(k + 1) % P.length], yaw = Math.atan2(q[0] - p[0], q[1] - p[1]);
     if (r < legs[k]) { const u = r / legs[k]; return { x: lerp(p[0], q[0], u), z: lerp(p[1], q[1], u), yaw }; }
     r -= legs[k];
-    if (r < G2.pause) { const nq = P[(k + 2) % P.length], nyaw = Math.atan2(nq[0] - q[0], nq[1] - q[1]); let d = nyaw - yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); return { x: q[0], z: q[1], yaw: yaw + d * smooth(0, G2.pause, r) }; }
+    if (r < G2.pause) {
+      const nq = P[(k + 2) % P.length], nyaw = Math.atan2(nq[0] - q[0], nq[1] - q[1]);
+      let d = nyaw - yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+      if (fake && k === 0) {                                     // the fake-out: right round, hold, then on as before
+        const third = G2.pause / 3, back = yaw + Math.PI;
+        let d2 = nyaw - back; d2 = Math.atan2(Math.sin(d2), Math.cos(d2));
+        const yy = r < third ? yaw + Math.PI * smooth(0, third, r) : r < 2 * third ? back : back + d2 * smooth(2 * third, G2.pause, r);
+        return { x: q[0], z: q[1], yaw: yy, fake: true };
+      }
+      return { x: q[0], z: q[1], yaw: yaw + d * smooth(0, G2.pause, r) };
+    }
     r -= G2.pause;
   }
   return { x: P[0][0], z: P[0][1], yaw: 0 };
