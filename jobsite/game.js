@@ -163,9 +163,9 @@ function ridgeDesign(x, z) {
   const G2 = R.gully;                                                                              // the washed-out gap
   h -= G2.depth * smooth(G2.z0 - 1.5, G2.z0 + 1, z) * smooth(G2.z1 + 1.5, G2.z1 - 1, z) * smooth(10, 7, ax);
   const S = R.slide, Bk = R.bank;
-  const loose = S.h * Math.max(0, 1 - Math.abs(z - S.z) / S.len) * smooth(8.5, 6, ax)
-    + Bk.h * smooth(0.6, -5, x) * smooth(Bk.z0 - 1.5, Bk.z0 + 1, z) * smooth(Bk.z1 + 1.5, Bk.z1 - 1, z) * (x > -6 ? 1 : 0);
-  const wall = smooth(-31, -27, z) * smooth(R.pitch.z1 - 1, R.pitch.z1 - 4, z) * smooth(4.7, 5.2, ax);
+  const loose = (S.h * Math.max(0, 1 - Math.abs(z - S.z) / S.len) * smooth(5.4, 4.4, ax)
+    + Bk.h * smooth(0.6, -4.6, x) * smooth(Bk.z0 - 1.5, Bk.z0 + 1, z) * smooth(Bk.z1 + 1.5, Bk.z1 - 1, z)) * smooth(4.9, 4.5, ax);   // only between the walls
+  const wall = smooth(-36, -33, z) * smooth(R.pitch.z1 + 1, R.pitch.z1 - 2, z) * smooth(4.5, 4.8, ax);
   return { h: h + loose, loose, mud: 0, rock: wall > 0.5 ? 1 : 0 };      // the cutting walls are bedrock: no digging through them
 }
 
@@ -1936,7 +1936,7 @@ function starChecks() {
   if (SITE === "flood") return [true, job.dry >= CFG.LEVELS.flood.dryStar, job.dry >= 0.999 && cars.every((c, k) => job.marks.has("car" + k))];
   if (SITE === "haul") { const q = job.queueAtOpen ?? queueLen(); return [true, q < CFG.LEVELS.haul.queueStar, !!job.ratings && job.ratings.every((r) => r.done && r.label === "perfect")]; }
   if (SITE === "river") return [true, (job.packed || 0) >= CFG.LEVELS.river.packStar, obj.has("cake") && !job.tiersLost];
-  if (SITE === "ridge") return [true, cutFillOk(), !job.marks.has("tipped") && obj.has("summit")];
+  if (SITE === "ridge") return [true, job.time <= CFG.LEVELS.ridge.targetTime, !job.marks.has("tipped") && obj.has("summit")];
   return [true, bonusCount() >= 1, bonusCount() >= 2];
 }
 const starsEarned = () => starChecks().filter(Boolean).length;
@@ -2550,7 +2550,7 @@ const mineP = (p) => !net.online || p.owner === net.id || p.owner === 0;
 // rolled, packed dirt barely wears at all. Returns the m³ removed.
 // o.axis "x" (default): the current runs along x in direction o.dir; "z": it pushes along z (against a levee).
 function erodeStep(o) {
-  const E = CFG.EROSION, step = E.tick * DT, dir = o.dir || 1, alongZ = o.axis === "z", up = alongZ ? 2 * dir : 2 * W * dir;
+  const E = CFG.EROSION, step = E.tick * DT * (o.mul || 1), dir = o.dir || 1, alongZ = o.axis === "z", up = alongZ ? 2 * dir : 2 * W * dir;
   const xi0 = Math.max(3, Math.round((o.x0 + HALF) / CELL)), xi1 = Math.min(G - 3, Math.round((o.x1 + HALF) / CELL));
   const zi0 = Math.max(1, Math.round((o.z0 + HALF) / CELL)), zi1 = Math.min(G - 1, Math.round((o.z1 + HALF) / CELL));
   const shelters = [];
@@ -2570,7 +2570,10 @@ function erodeStep(o) {
       if (ahead > 0 && ahead < E.reach && side < shelters[k + 2] + E.halfWidth) { rate *= E.shelter; break; }
     }
     const d = Math.min(soft, rate * step);
-    if (d > 1e-5) { addHeight(xi, zi, -d); lost += d; }
+    if (d > 1e-5) {
+      addHeight(xi, zi, -d); lost += d;
+      if (d > 0.002 && Math.random() < 0.05) spawnDirt(x, h + 0.1, z, (alongZ ? 0 : dir) * 1.5, 0.6, (alongZ ? dir : 0) * 1.5, 0, 0);    // a muddy splash: you can see it go
+    }
   }
   return lost * CELL * CELL;
 }
@@ -2590,7 +2593,7 @@ function riverRules() {
   const R = RIVER;
   // erosion: the host's game wears the river's loose dirt
   if ((!net.online || net.hostId === net.id) && stepCount % CFG.EROSION.tick === 0) {
-    const m3 = erodeStep({ x0: -40, x1: 40, z0: R.mid - 11, z1: R.mid + 11, water: R.water, rocks: riprapRocks, dir: 1 });
+    const m3 = erodeStep({ x0: -40, x1: 40, z0: R.mid - 11, z1: R.mid + 11, water: R.water, rocks: riprapRocks, dir: 1, mul: CFG.LEVELS.river.erosion });
     job.erosion = lerp(job.erosion || 0, (m3 * 60) / (CFG.EROSION.tick * DT), 0.3);       // m³ per minute, smoothed
   }
   // the wedding cake: a hard jolt knocks a tier off (whoever is towing it decides)
@@ -2788,7 +2791,7 @@ function checkRidge() {
   const cp = cabin.body.translation();
   const cleared = obj.has("slide"), filled = obj.has("gully"), staged = obj.has("stage");
   padMarker.beam.visible = staged;
-  elTasks.innerHTML = `<h2>Ridge Road</h2>${obj.render()}${cutFillHtml()}${starsHtml(obj.mainDone())}
+  elTasks.innerHTML = `<h2>Ridge Road</h2>${obj.render()}${starsHtml(obj.mainDone())}
     <div class="sub">Time ${clock(job.time)} &nbsp; ${K("O")} grade overlay</div>
     <button id="leave">Back to the quarry</button>`;
   const t = chassis.translation(), onTop = t.y > R.top - 1.2 && t.z > R.pitch.z1 - 1, towing = winch.on && winch.kind === 1 && winch.ref === cabin.index;

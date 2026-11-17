@@ -25,13 +25,15 @@ export const LEVELS = {
   },
   river: {
     stars: ["Get the cake to the wedding", "Pack 90% of the causeway", "Deliver the cake with all three tiers"],
+    erosion: 3,                    // how much harder the river's current wears dirt than the base rates below
     packNeed: 0.6,                 // share of the causeway's top that must be packed (job)
     packStar: 0.9,                 // ... for the star
     cakeBump: 2.5,                 // m/s change in the cake's up-down speed over 5 physics steps that knocks a tier off
                                    // (gentle towing on the road: ~0.7; full speed: ~1.6; a 2 m drop: ~6)
   },
   ridge: {
-    stars: ["Get the cabin to the summit", "Balance cut and fill (within 10%)", "Never tip the cabin over 15°"],
+    stars: ["Get the cabin to the summit", "Finish in under 15:00", "Never tip the cabin over 15°"],
+    targetTime: 900,               // seconds, for the second star
     cutFillTolerance: 0.10,        // how far apart dug and placed dirt may be for the cut/fill star (fraction)
     gradeTolerance: 0.3,           // metres either side of the road level that count as "on grade"
   },
