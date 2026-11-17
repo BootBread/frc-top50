@@ -1,6 +1,32 @@
 // What people say, per level and event. Each entry is a list of [character id, line].
 // Events: start (the level begins), done (the level is finished), and one per objective id.
 export const LINES = {
+  treasure: {
+    start: [
+      ["hinston", "Arr! Captain Hinston. Me granddad's treasure map got soaked in the storm. All that's left is clues."],
+      ["hinston", "Everything's measured in car lengths. One car length: one of your loaders. Mind the decoys, he was a joker."],
+    ],
+    c0: [["hinston", "A marker post! Granddad's handwriting. On to the next one."]],
+    c1: [["hinston", "Another! We're getting close, I can smell the gold. Or the river."]],
+    c2: [["hinston", "The last clue! The chest is buried deep. Bring a big shovel. Well, a loader."]],
+    c3: [["hinston", "THE CHEST! Winch it out, it's far too heavy to lift."]],
+    done: [["hinston", "Gold! Well, mostly buttons. Granddad loved buttons. Arr, thank you, matey."]],
+  },
+  airstrip: {
+    start: [
+      ["pajaro", "You are the construction people. Good. I need a runway. For reasons."],
+      ["pajaro", "Level. Firm. No trees. Do not ask about the plane."],
+    ],
+    trees: [["pajaro", "The trees are down. Nobody saw anything."]],
+    early: [["pajaro", "The plane is early. Do not ask how I know."]],
+    rain: [["pajaro", "Rain. Roll the dirt, or it becomes soup. I do not land in soup."]],
+    pack: [["pajaro", "Firm. Good. Firm is good."]],
+    inbound: [["pajaro", "It is coming. Everybody off the runway."]],
+    done3: [["pajaro", "...acceptable."], ["bea", "A perfect landing! Nobody ask what's in the boxes."]],
+    done2: [["pajaro", "...acceptable. A small bounce. We will not speak of it."]],
+    done1: [["pajaro", "...acceptable. We will speak of the wheel later."]],
+  },
+
   farm: {
     start: [
       ["dot", "Oh, thank goodness you're here. That storm made a mess of the whole farm last night."],

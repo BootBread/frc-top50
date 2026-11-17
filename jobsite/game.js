@@ -11,10 +11,10 @@ const [{ createPopups }, { createObjectives, when }, CFG, { CHARACTERS }, { LINE
   ["./sys/popups.js", "./sys/objectives.js", "./data/config.js", "./data/characters.js", "./data/lines.js", "./sys/sound.js"].map((f) => import(f + V)));
 
 const params = new URLSearchParams(location.search);
-const SITE = ["farm", "river", "ridge", "haul", "flood"].includes(params.get("site")) ? params.get("site") : "hub";
-const SEED = { hub: 20261116, farm: 20261117, river: 20261118, ridge: 20261119, haul: 20261120, flood: 20261121 }[SITE];
-const TITLES = { farm: "Muddle Acres", river: "Rapid River", ridge: "Ridge Road", haul: "Gravel Run", flood: "Flood Season" };
-const LEVEL_NUM = { farm: 1, river: 2, ridge: 3, haul: 4, flood: 5 };
+const SITE = ["farm", "river", "ridge", "haul", "flood", "treasure", "airstrip"].includes(params.get("site")) ? params.get("site") : "hub";
+const SEED = { hub: 20261116, farm: 20261117, river: 20261118, ridge: 20261119, haul: 20261120, flood: 20261121, treasure: 20261122, airstrip: 20261123 }[SITE];
+const TITLES = { farm: "Muddle Acres", river: "Rapid River", ridge: "Ridge Road", haul: "Gravel Run", flood: "Flood Season", treasure: "X Marks the Spot", airstrip: "No Questions Asked" };
+const LEVEL_NUM = { farm: 1, river: 2, ridge: 3, haul: 4, flood: 5, treasure: 6, airstrip: 7 };
 const DT = 1 / 60;
 const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
 const SERVER = LOCAL ? "ws://localhost:8788" : "wss://jobsite-rooms.frctop50.workers.dev";
@@ -55,6 +55,8 @@ const HUB = {
     { id: "ridge", title: "3 · Ridge Road", x: 12, z: -44, needs: "river" },
     { id: "haul", title: "4 · Gravel Run", x: -62, z: -44, needs: "ridge" },
     { id: "flood", title: "5 · Flood Season", x: -62, z: -18, needs: "haul" },
+    { id: "treasure", title: "6 · X Marks the Spot", x: -62, z: 8, needs: "flood" },
+    { id: "airstrip", title: "7 · No Questions Asked", x: 62, z: 8, needs: "flood" },
     { id: "garage", title: "Garage", x: 46, z: -46, garage: true },
     { id: "paint", title: "Paint Shop", x: 69, z: -46, paint: true },
   ],
@@ -256,6 +258,89 @@ function floodDesign(x, z) {
   return { h: h + loose, loose, mud: 0, rock: berm > 0.6 ? 1 : 0 };
 }
 
+// ----- level 6: X Marks the Spot. A clue chain in car lengths (one car length = 6 m) between landmarks,
+// across a shallow river and a deep one, to a chest buried 2 m down. Four layouts; a room always gets the same one.
+const CAR = 6;
+const TREASURE = {
+  spawn: { x: 0, z: -76, yaw: 0 }, home: { x: 0, z: -66, r: 7 },
+  ford: { z: -30, w: 5, depth: 0.5, water: 0.0 },        // shallow: drive straight through
+  deep: { z: 30, w: 4.5, depth: 2.6, water: -0.1 },      // deep: build a causeway
+  spoil: [{ x: 14, z: 17, r: 7, h: 3.4 }, { x: -22, z: 18, r: 6, h: 3.0 }],
+  marks: {
+    pine: { x: -44, z: -52, name: "the lone dead pine" }, twins: { x: 8, z: -48, name: "the twin boulders" },
+    dog: { x: 38, z: -12, name: "the rock shaped like a sleeping dog" }, well: { x: -50, z: 8, name: "the old well" },
+    mill: { x: 44, z: 52, name: "the windmill" }, crow: { x: -36, z: 62, name: "the scarecrow" },
+  },
+  // each layout: four clues; the last one is where the chest is
+  layouts: [
+    [["pine", "E", 5], ["dog", "W", 4], ["well", "E", 5], ["mill", "W", 6]],
+    [["twins", "W", 6], ["well", "S", 3], ["dog", "N", 5], ["crow", "E", 7]],
+    [["pine", "E", 3], ["dog", "W", 6], ["well", "E", 3], ["mill", "W", 3]],
+    [["twins", "E", 5], ["dog", "W", 3], ["well", "S", 4], ["crow", "S", 4]],
+  ],
+  decoys: [[-10, -62], [24, -60], [-30, -6], [26, 4], [-14, 46], [24, 68]],
+  junk: ["an old boot", "a rusty tin can", "a rubber duck", "a garden gnome", "a soggy sandwich", "a bowling ball"],
+  yards: [{ x: 16, z: -74, r: 5.5 }],
+};
+const DIRV = { N: [0, 1], S: [0, -1], E: [1, 0], W: [-1, 0] }, DIRNAME = { N: "north", S: "south", E: "east", W: "west" };
+// which layout: a room's code picks it (so everyone in the room digs the same field); solo, a random one each time
+const TLAYOUT = (() => {
+  if (SITE !== "treasure") return 0;
+  const rc = params.get("room");
+  if (rc) { let h = 0; for (const ch of rc) h = (h * 31 + ch.charCodeAt(0)) | 0; return Math.abs(h) % TREASURE.layouts.length; }
+  return Math.floor(Math.random() * TREASURE.layouts.length);
+})();
+const TCLUES = TREASURE.layouts[TLAYOUT].map(([m, d, n], k) => {
+  const L = TREASURE.marks[m], [dx, dz] = DIRV[d];
+  return { x: L.x + dx * n * CAR, z: L.z + dz * n * CAR, a: `From ${L.name},`, b: `go ${n} car lengths ${DIRNAME[d]}${k === 3 ? " and dig deep" : ", then dig"}.`, chest: k === 3 };
+});
+const TMOUNDS = [...TCLUES, ...TREASURE.decoys.map(([x, z]) => ({ x, z }))];
+function treasureDesign(x, z) {
+  const T = TREASURE;
+  let h = (noise(x / 40, z / 40) - 0.5) * 3 + (noise(x / 12 + 3, z / 12) - 0.5) * 0.8 + 0.7;
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  h = lerp(h, 0.4, smooth(22, 10, Math.hypot(x - T.spawn.x, z - T.spawn.z + 4)));
+  for (const L of Object.values(T.marks)) h = lerp(h, 0.6, smooth(9, 4, Math.hypot(x - L.x, z - L.z)));
+  for (const R of [T.ford, T.deep]) {
+    const ds = Math.abs(z - R.z);
+    h = lerp(h, 0.25, smooth(R.w + 9, R.w + 2, ds));
+    h -= (R.depth + 0.25) * smooth(R.w + 1.5, R.w * 0.4, ds);
+  }
+  let loose = 0;
+  for (const S of T.spoil) loose += S.h * Math.max(0, 1 - (Math.hypot(x - S.x, z - S.z) / S.r) ** 1.6);
+  for (const M of TMOUNDS) loose += 0.7 * Math.max(0, 1 - (Math.hypot(x - M.x, z - M.z) / 2.3) ** 2);     // every mound looks the same
+  return { h: h + loose, loose, mud: 0 };
+}
+
+// ----- level 7: No Questions Asked. A jungle airstrip for Señor Pinstón: fell the trees, clear the
+// stumps and rocks, cut and fill it level, gravel the mud, roll it firm. Rain turns loose dirt to mud.
+const AIR = {
+  spawn: { x: -62, z: -44, yaw: 0 },
+  strip: { x0: -72, x1: 72, z: 0, half: 8, level: 0.6 },
+  trees: [[-56, 3, 1.15], [-40, -5, 1.1], [-22, 4, 1.2], [-4, -3, 1.15], [24, 5, 1.2], [42, -4, 1.1], [60, 2, 1.15]],
+  giant: [12, 1],
+  rocks: [[-48, -2, 1.0], [-30, 6, 0.9], [-12, -6, 1.05], [32, 0, 1.0], [52, 6, 0.95]],
+  mud: [[-28, -1, 6], [36, 2, 7]],
+  gravel: { x: 0, z: -34, r: 10, h: 3.2 },
+  yards: [{ x: -62, z: -60, r: 5.5 }, { x: 22, z: -36, r: 5.5 }],
+  showers: { every: 220, len: 55 },
+};
+const stripSurface = (x) => AIR.strip.level + 0.85 * Math.sin(x / 11) + 0.45 * Math.sin(x / 5.3 + 1);    // humps and hollows to cut and fill
+function airDesign(x, z) {
+  const A = AIR, S = A.strip;
+  let h = (noise(x / 34, z / 34) - 0.5) * 3.2 + (noise(x / 10 + 3, z / 10) - 0.5) * 1.0 + 1.0;
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 14;
+  h = lerp(h, 0.6, smooth(16, 8, Math.hypot(x - A.spawn.x, z - A.spawn.z - 8)));
+  for (const Y of A.yards) h = lerp(h, 0.6, smooth(10, 5, Math.hypot(x - Y.x, z - Y.z)));
+  const dz = Math.abs(z - S.z), along = smooth(S.x0 - 6, S.x0, x) * smooth(S.x1 + 6, S.x1, x);
+  h = lerp(h, stripSurface(x), smooth(S.half + 7, S.half + 1, dz) * along);
+  let mud = 0;
+  for (const [mx, mz, r] of A.mud) mud = Math.max(mud, 1.35 * smooth(r, r * 0.6, Math.hypot(x - mx, z - mz)));
+  const G2 = A.gravel, grav = G2.h * Math.max(0, 1 - (Math.hypot(x - G2.x, z - G2.z) / G2.r) ** 1.6);
+  h = lerp(h, 0.6, smooth(G2.r + 6, G2.r, Math.hypot(x - G2.x, z - G2.z)));
+  return { h: h + grav, loose: grav, mud, grav };
+}
+
 function hubDesign(x, z) {
   let h = (noise(x / 46, z / 46) - 0.5) * 9 + (noise(x / 17 + 9, z / 17 + 4) - 0.5) * 2.6 + (noise(x / 6, z / 6) - 0.5) * 0.5;
   h += smooth(74, 94, Math.max(Math.abs(x), Math.abs(z))) * 16;                       // quarry walls
@@ -299,7 +384,7 @@ function farmDesign(x, z, noSink = false) {
 // ---------- terrain grid ----------
 const G = 384, CELL = 0.5, SIZE = G * CELL, HALF = SIZE / 2, CH = 32, NC = G / CH, W = G + 1;
 const BEDROCK = 5;                            // how far below the original ground you can dig
-const design = { hub: hubDesign, farm: farmDesign, river: riverDesign, ridge: ridgeDesign, haul: haulDesign, flood: floodDesign }[SITE];
+const design = { hub: hubDesign, farm: farmDesign, river: riverDesign, ridge: ridgeDesign, haul: haulDesign, flood: floodDesign, treasure: treasureDesign, airstrip: airDesign }[SITE];
 // heights[zi + xi * W]: rows along z, columns along x, the layout Rapier's heightfield wants.
 // firm[i] is the top of undisturbed ground: anything above it is loose dirt.
 const heights = new Float32Array(W * W), base = new Float32Array(W * W), firm = new Float32Array(W * W),
@@ -326,7 +411,8 @@ function sample(arr, x, z) {
 }
 const heightAt = (x, z) => sample(heights, x, z);
 // a layer of gravel makes mud firm
-const mudAt = (x, z) => sample(mudA, x, z) * (1 - smooth(0.03, 0.12, sample(gravH, x, z)));
+let rainWet = 0;                     // 0..1 while a shower soaks the ground (No Questions Asked)
+const mudAt = (x, z) => (sample(mudA, x, z) + (rainWet > 0 ? rainWet * 1.1 * sample(loose, x, z) * (1 - sample(pack, x, z)) : 0)) * (1 - smooth(0.03, 0.12, sample(gravH, x, z)));
 function slopeAt(x, z) {
   const gx = (heightAt(x + 0.75, z) - heightAt(x - 0.75, z)) / 1.5, gz = (heightAt(x, z + 0.75) - heightAt(x, z - 0.75)) / 1.5;
   return Math.atan(Math.hypot(gx, gz));
@@ -380,6 +466,20 @@ function groundColor(wx, wz, hm, steep) {
     _c.lerp(cRock, Math.max(smooth(0.75, 1.2, steep), smooth(8, 12, hm)));
     return;
   }
+  if (SITE === "treasure") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    _c.lerp(cSand, Math.max(smooth(-0.1, -0.6, hm), smooth(11, 7, Math.abs(wz - TREASURE.ford.z)) * 0.6, smooth(10, 6.5, Math.abs(wz - TREASURE.deep.z)) * 0.7));
+    _c.lerp(cDirt, smooth(9, 5, Math.hypot(wx - TREASURE.home.x, wz - TREASURE.home.z)) * 0.7);
+    _c.lerp(cRock, smooth(0.9, 1.3, steep) * 0.7);
+    return;
+  }
+  if (SITE === "airstrip") {
+    _c.copy(cGrass2).multiplyScalar(0.82).lerp(cGrass, noise(wx / 9 + 5, wz / 9) * 0.6);
+    const S = AIR.strip, onStrip = smooth(S.half + 2, S.half, Math.abs(wz - S.z)) * smooth(S.x0 - 3, S.x0, wx) * smooth(S.x1 + 3, S.x1, wx);
+    _c.lerp(cDirt, onStrip * 0.75);
+    _c.lerp(cRock, smooth(0.9, 1.3, steep) * 0.7);
+    return;
+  }
   if (SITE === "haul") {
     _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
     const P = HAUL.pad, out = Math.max(Math.abs(wx - P.x) - P.w / 2, Math.abs(wz - P.z) - P.d / 2);
@@ -420,6 +520,7 @@ function groundColor(wx, wz, hm, steep) {
 // grade, blue low); "pack" shows how firm the ground is (orange loose, teal packed).
 const overlay = { mode: "" };
 const GRADE = {
+  airstrip: { tol: CFG.LEVELS.airstrip.tol, at: (x, z) => (x > AIR.strip.x0 && x < AIR.strip.x1 && Math.abs(z - AIR.strip.z) < AIR.strip.half ? AIR.strip.level : null), what: "the airstrip" },
   haul: { tol: 0.06, at: (x, z) => (HAUL.tents.some(([cx, cz]) => Math.abs(x - cx) < HAUL.tentW / 2 && Math.abs(z - cz) < HAUL.tentD / 2) ? 0.36 : null), what: "the tent pads" },
   ridge: { tol: CFG.LEVELS.ridge.gradeTolerance, at: (x, z) => (Math.abs(x) < 2.6 && z > -30 && z < RIDGE.stage.z0 ? ridgeRoad(z) : null), what: "the road (5 m wide)" },
 }[SITE] || null;
@@ -1138,6 +1239,131 @@ function lockGate() {
   gateCollider = world.createCollider(RAPIER.ColliderDesc.cuboid(F.gate.w / 2, 1.5, 0.25).setTranslation(F.gate.x, heightAt(F.gate.x, F.levee.z) + 1.5, F.levee.z));
 }
 
+// ----- level 6: X Marks the Spot -----
+let tChest = null, tMill = null, tRuler = null, tCompass = null, homeMarker = null;
+const tPosts = [], tJunk = [];
+if (SITE === "treasure") {
+  const T = TREASURE, wmat = new THREE.MeshLambertMaterial({ color: 0x4f86a6, transparent: true, opacity: 0.85 });
+  backdropTrees(130, 82, 94);
+  for (const R of [T.ford, T.deep]) { const w = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, R.w * 2 + 6), wmat); w.rotation.x = -Math.PI / 2; w.position.set(0, R.water, R.z); scene.add(w); }
+  homeMarker = marker(T.home.x, T.home.z, T.home.r, 0x8be28b);
+  const grey = lam(0x8d8a85, true), at = (L) => heightAt(L.x, L.z), M = T.marks;
+  const solid = (geo, mat, x, y, z, r) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; scene.add(m);
+    world.createCollider(RAPIER.ColliderDesc.ball(r).setTranslation(x, y, z)); return m; };
+  {                                                // the lone dead pine: a tall grey trunk with bare branches
+    const L = M.pine, y = at(L), g = new THREE.Group(); g.position.set(L.x, y, L.z); scene.add(g); const bark = lam(0x8a8378);
+    const t = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.45, 9, 6), bark); t.position.y = 4.5; t.castShadow = true; g.add(t);
+    for (let k = 0; k < 6; k++) { const b = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.1, 2.2, 4), bark); b.position.set(0, 3.5 + k * 0.8, 0); b.rotation.set(0, k * 2.1, 1.0 + (k % 2) * 0.4); b.translateY(0.9); g.add(b); }
+    world.createCollider(RAPIER.ColliderDesc.cylinder(4.5, 0.45).setTranslation(L.x, y + 4.5, L.z)); anchors.push({ pos: new THREE.Vector3(L.x, y + 1.2, L.z), name: "dead pine" });
+  }
+  { const L = M.twins, y = at(L); solid(new THREE.DodecahedronGeometry(1.6, 0), grey, L.x - 1.7, y + 1.1, L.z, 1.5); solid(new THREE.DodecahedronGeometry(1.5, 0), grey, L.x + 1.7, y + 1.0, L.z + 0.4, 1.4); }
+  {                                                // a rock shaped like a sleeping dog: curled body, head on its paws, ears, a tail
+    const L = M.dog, y = at(L), g = new THREE.Group(); g.position.set(L.x, y, L.z); g.rotation.y = 0.6; scene.add(g);
+    const part = (geo, x, y2, z, sx = 1, sy = 1, sz = 1) => { const m = new THREE.Mesh(geo, grey); m.position.set(x, y2, z); m.scale.set(sx, sy, sz); m.castShadow = true; g.add(m); };
+    part(new THREE.SphereGeometry(1.4, 8, 6), 0, 0.9, 0, 1.5, 0.75, 1); part(new THREE.SphereGeometry(0.75, 8, 6), 2.0, 0.6, 0.6, 1.1, 0.8, 1);
+    part(new THREE.ConeGeometry(0.3, 0.6, 4), 2.1, 1.25, 0.25); part(new THREE.ConeGeometry(0.3, 0.6, 4), 2.1, 1.25, 0.95);
+    part(new THREE.CylinderGeometry(0.15, 0.25, 1.8, 5), -2.0, 0.4, 0.8, 1, 1, 1);
+    world.createCollider(RAPIER.ColliderDesc.cuboid(2.6, 0.9, 1.5).setTranslation(L.x, y + 0.9, L.z));
+  }
+  {                                                // the old well
+    const L = M.well, y = at(L), w = new THREE.Group(); w.position.set(L.x, y, L.z); scene.add(w);
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(1.0, 1.1, 0.9, 14, 1, true), lam(0x9a948a)); ring.material.side = THREE.DoubleSide; ring.position.y = 0.45; w.add(ring);
+    for (const sx of [-0.9, 0.9]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.15, 2.1, 0.15), lam(0x6e5034)); p.position.set(sx, 1.05, 0); w.add(p); }
+    const roof = new THREE.Mesh(new THREE.ConeGeometry(1.4, 0.8, 4), lam(0x8f3b2e, true)); roof.position.y = 2.4; roof.rotation.y = Math.PI / 4; w.add(roof);
+    world.createCollider(RAPIER.ColliderDesc.cylinder(0.6, 1.1).setTranslation(L.x, y + 0.5, L.z));
+  }
+  {                                                // the windmill, sails turning
+    const L = M.mill, y = at(L), g = new THREE.Group(); g.position.set(L.x, y, L.z); scene.add(g);
+    const tower = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 2.4, 9, 8), lam(0xe9dcc3)); tower.position.y = 4.5; tower.castShadow = true; g.add(tower);
+    const cap = new THREE.Mesh(new THREE.ConeGeometry(1.8, 2, 8), lam(0x8f3b2e)); cap.position.y = 10; g.add(cap);
+    tMill = new THREE.Group(); tMill.position.set(0, 8.5, -1.9); g.add(tMill);
+    for (let k = 0; k < 4; k++) { const s2 = new THREE.Mesh(new THREE.BoxGeometry(0.9, 5, 0.1), lam(0xf4f1ea)); s2.position.y = 2.6; const arm = new THREE.Group(); arm.rotation.z = (k * Math.PI) / 2; arm.add(s2); tMill.add(arm); }
+    world.createCollider(RAPIER.ColliderDesc.cylinder(4.5, 2.2).setTranslation(L.x, y + 4.5, L.z));
+  }
+  {                                                // the scarecrow
+    const L = M.crow, y = at(L), g = new THREE.Group(); g.position.set(L.x, y, L.z); scene.add(g); const wood = lam(0x8a6a44);
+    const pole = new THREE.Mesh(new THREE.BoxGeometry(0.2, 3.2, 0.2), wood); pole.position.y = 1.6; g.add(pole);
+    const arms = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.18, 0.18), wood); arms.position.y = 2.5; g.add(arms);
+    const shirt = new THREE.Mesh(new THREE.BoxGeometry(1.2, 1.0, 0.5), lam(0xb8462e)); shirt.position.y = 2.2; shirt.castShadow = true; g.add(shirt);
+    const head = new THREE.Mesh(new THREE.SphereGeometry(0.35, 8, 6), lam(0xe8c87a)); head.position.y = 3.0; g.add(head);
+    const hat = new THREE.Mesh(new THREE.ConeGeometry(0.55, 0.6, 8), lam(0x5a3d26)); hat.position.y = 3.45; g.add(hat);
+    world.createCollider(RAPIER.ColliderDesc.cylinder(1.6, 0.2).setTranslation(L.x, y + 1.6, L.z));
+  }
+  // the buried marker posts (they pop up when dug out), and the junk under the decoy mounds
+  const wood = lam(0x8a6a44), red = lam(0xd8333a);
+  for (const C of TCLUES) {
+    if (C.chest) continue;
+    const g = new THREE.Group(); g.position.set(C.x, heightAt(C.x, C.z) - 3, C.z); scene.add(g);
+    const p = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.0, 0.25), wood); p.position.y = 1.0; p.castShadow = true; g.add(p);
+    const rib = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.25, 0.05), red); rib.position.set(0.3, 1.8, 0); g.add(rib);
+    g.visible = false; tPosts.push(g);
+  }
+  T.decoys.forEach(([x, z], k) => {
+    const shapes = [new THREE.BoxGeometry(0.4, 0.5, 0.9), new THREE.CylinderGeometry(0.2, 0.2, 0.4, 10), new THREE.SphereGeometry(0.35, 10, 8), new THREE.ConeGeometry(0.3, 0.8, 8), new THREE.BoxGeometry(0.6, 0.2, 0.6), new THREE.SphereGeometry(0.4, 12, 10)];
+    const cols = [0x5a3d26, 0x9aa3ad, 0xf7d23e, 0xd8333a, 0xe8c87a, 0x22262c];
+    const m = new THREE.Mesh(shapes[k % 6], lam(cols[k % 6])); m.position.set(x, heightAt(x, z) - 0.2, z); m.visible = false; m.castShadow = true; scene.add(m); tJunk.push(m);
+  });
+  // the chest, 2 m down under the last mound (it stays put until it's dug out)
+  const C4 = TCLUES[3];
+  tChest = addCrate(C4.x, C4.z, 1.8, 0.9, 1.2, 0x7a4b2a, "treasure chest", 420);
+  tChest.mesh.children[1].material = tChest.mesh.children[2].material = lam(0xffc928);
+  tChest.body.setBodyType(RAPIER.RigidBodyType.Fixed, true);
+  tChest.body.setTranslation({ x: C4.x, y: base[Math.round((C4.z + HALF) / CELL) + Math.round((C4.x + HALF) / CELL) * W] - 0.7 - 2.0 + 0.45, z: C4.z }, true);
+  // a car-length ruler you can switch on (O), and a compass
+  tRuler = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 0.06, 0.18), new THREE.MeshBasicMaterial({ color: 0xffffff }), 12);
+  tRuler.visible = false; tRuler.frustumCulled = false; scene.add(tRuler);
+  tCompass = document.createElement("div"); tCompass.id = "compass"; tCompass.className = "panel"; document.body.appendChild(tCompass);
+}
+
+// ----- level 7: No Questions Asked -----
+const standing = [], stripRocks = [];
+let plane = null, planeWheel = null, airRain = null;
+// A standing tree you can fell with a winch (it becomes a log, leaving a stump to pull out)
+function addStandingTree(x, z, s, giant) {
+  const y = heightAt(x, z), mesh = new THREE.Group(); scene.add(mesh);
+  const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.scale.set(s * 1.3, s, s * 1.3); trunk.position.y = 1.1 * s; trunk.castShadow = true;
+  const leaf = new THREE.Mesh(leafGeo, leafMat); leaf.scale.setScalar(s); leaf.position.y = 4.2 * s; leaf.castShadow = true;
+  mesh.add(trunk, leaf);
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(x, y, z));
+  world.createCollider(RAPIER.ColliderDesc.cylinder(1.6 * s, 0.42 * s).setTranslation(0, 1.5 * s, 0), body);
+  const t = addProp({ type: "standing", name: giant ? "giant tree" : "tree", body, mesh, r: 0.5 * s, x, z, damp: 0, anchorsLocal: [new THREE.Vector3(0, 1.4 * s, 0)], giant, pullT: 0 });
+  const log = addLog(x, z + 3 * s, giant ? 12 : 8, giant ? 0.55 : 0.38, Math.PI / 2);
+  const stump = addStump(x, z);
+  for (const p of [log, stump]) { p.active = false; p.body.setEnabled(false); p.mesh.visible = false; }
+  t.log = log; t.stump = stump;
+  return t;
+}
+if (SITE === "airstrip") {
+  const A = AIR, S = A.strip;
+  backdropTrees(240, 76, 94);
+  for (let k = 0; k < 46; k++) {                    // jungle round the strip (not on it)
+    const x = -80 + rng() * 160, z = (rng() < 0.5 ? -1 : 1) * (S.half + 9 + rng() * 50);
+    if (Math.hypot(x - A.spawn.x, z - A.spawn.z) < 14 || Math.hypot(x - A.gravel.x, z - A.gravel.z) < A.gravel.r + 4 || A.yards.some((Y) => Math.hypot(x - Y.x, z - Y.z) < 10)) continue;
+    addTree(x, z, 1.0 + rng() * 0.6);
+  }
+  for (let x = S.x0; x <= S.x1; x += 12) for (const e of [-1, 1]) {        // white edge markers
+    const c = new THREE.Mesh(new THREE.ConeGeometry(0.3, 0.7, 6), lam(0xf4f1ea)); c.position.set(x, stripSurface(x) + 0.35, e * (S.half + 0.8)); scene.add(c);
+  }
+  { const sock = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.8, 8).rotateZ(Math.PI / 2), lam(0xff7a2a)); sock.position.set(S.x1 + 4, heightAt(S.x1 + 4, S.half + 4) + 4, S.half + 4); scene.add(sock);
+    const pole = new THREE.Mesh(new THREE.BoxGeometry(0.15, 4, 0.15), lam(0xd9d9d9)); pole.position.set(S.x1 + 5, heightAt(S.x1 + 5, S.half + 4) + 2, S.half + 4); scene.add(pole); }
+  // the plane: shown only when it comes in to land
+  plane = new THREE.Group(); scene.add(plane); plane.visible = false;
+  { const body = lam(0xe8e1d0), trim = lam(0x2fb5a8);
+    const part = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; plane.add(m); return m; };
+    part(new THREE.CylinderGeometry(0.9, 0.6, 11, 10).rotateZ(Math.PI / 2), body, 0, 1.6, 0);
+    part(new THREE.BoxGeometry(2.4, 0.18, 15), body, 0.8, 1.9, 0); part(new THREE.BoxGeometry(1.4, 0.15, 5), trim, -5, 2.0, 0);
+    part(new THREE.BoxGeometry(1.4, 2.0, 0.15), trim, -5.2, 2.8, 0); part(new THREE.BoxGeometry(0.15, 2.6, 0.3), lam(0x22262c), 5.7, 1.6, 0);
+    for (const z of [-1.6, 1.6]) part(new THREE.CylinderGeometry(0.4, 0.4, 0.3, 10).rotateX(Math.PI / 2), lam(0x22262c), 0.5, 0.4, z);
+    planeWheel = part(new THREE.CylinderGeometry(0.3, 0.3, 0.25, 10).rotateX(Math.PI / 2), lam(0x22262c), 4.5, 0.35, 0);
+  }
+  airRain = new THREE.InstancedMesh(new THREE.BoxGeometry(0.03, 0.9, 0.03), new THREE.MeshBasicMaterial({ color: 0xb8c8d6, transparent: true, opacity: 0.5 }), 400);
+  airRain.frustumCulled = false; airRain.visible = false; airRain.userData.drops = Array.from({ length: 400 }, () => [Math.random() * 60 - 30, Math.random() * 30, Math.random() * 60 - 30]); scene.add(airRain);
+  // props in a fixed order: standing trees (each with its log and stump), the giant, rocks
+  for (const [x, z, s] of A.trees) standing.push(addStandingTree(x, z, s, false));
+  standing.push(addStandingTree(A.giant[0], A.giant[1], 1.9, true));
+  for (const [x, z, r] of A.rocks) stripRocks.push(addRock(x, z, r, "rock"));
+}
+
 function setActiveBoulders(n) {
   n = clamp(n, 5, boulders.length);
   for (let i = 0; i < boulders.length; i++) {
@@ -1170,7 +1396,7 @@ function box(mat, sx, sy, sz, x, y, z, parent) {
   m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
   return m;
 }
-const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn, ridge: RIDGE.spawn, haul: HAUL.spawn, flood: FLOOD.spawn }[SITE];
+const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn, ridge: RIDGE.spawn, haul: HAUL.spawn, flood: FLOOD.spawn, treasure: TREASURE.spawn, airstrip: AIR.spawn }[SITE];
 const spawnAt = (slot) => {
   const off = -7.5 + slot * 5, c = Math.cos(site0.yaw), s = Math.sin(site0.yaw);
   return { x: site0.x + off * c, z: site0.z - off * s, yaw: site0.yaw };
@@ -1355,8 +1581,8 @@ try { myLook = cleanLook(JSON.parse(localStorage.getItem("jobsite-look") || "nul
 applyLook(me, myLook);
 const chassis = me.body;
 // Places to change vehicle: the garage in the quarry, and a vehicle yard near the start of each job.
-const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 }, haul: HAUL.yards[0], flood: FLOOD.yards[0] }[SITE] || null;
-const YARDS = { haul: HAUL.yards, flood: FLOOD.yards }[SITE] || (YARD ? [YARD] : []);
+const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 }, haul: HAUL.yards[0], flood: FLOOD.yards[0], treasure: TREASURE.yards[0], airstrip: AIR.yards[0] }[SITE] || null;
+const YARDS = { haul: HAUL.yards, flood: FLOOD.yards, airstrip: AIR.yards }[SITE] || (YARD ? [YARD] : []);
 function parkDisplay(kind, slot, x, z, yaw) {
   const d = makeLoader(slot, false);
   setKind(d, kind);
@@ -1374,7 +1600,7 @@ if (SITE === "hub") {
   if (SITE === "farm") { barnRoller = parkDisplay("roller", 2, FARM.roller.x, FARM.roller.z, Math.PI); barnRoller.group.visible = false; displays.push(barnRoller); }
   YARDS.forEach((y, n) => {
     marker(y.x, y.z, y.r, 0xb48cff);
-    const big = SITE === "haul" || SITE === "flood";
+    const big = ["haul", "flood", "treasure", "airstrip"].includes(SITE);
     displays.push(parkDisplay(big ? "truck" : "roller", 2, y.x + 8.5, y.z + 1, -0.5));
     if (big && n === 0) displays.push(parkDisplay("roller", 3, y.x - 8.5, y.z + 1, 0.5));
   });
@@ -1643,9 +1869,10 @@ function inPaintShop() {
   const t = chassis.translation(), ps = houses.find((h) => h.paint);
   return !!ps && ps.b.inside(t.x, t.z);
 }
-const rollerUnlocked = () => testUnlock || SITE === "river" || SITE === "ridge" || !!(progress.farm && progress.farm.done);
+const NEW_LEVEL = SITE === "treasure" || SITE === "airstrip";        // the new levels: every vehicle is yours
+const rollerUnlocked = () => testUnlock || NEW_LEVEL || SITE === "river" || SITE === "ridge" || !!(progress.farm && progress.farm.done);
 // the ranger hands the dump truck over at the gravel pit in Gravel Run; after that it's yours everywhere
-const truckUnlocked = () => testUnlock || SITE === "flood" || !!progress.truck || !!(progress.haul && progress.haul.done) || (SITE === "haul" && !!obj && obj.has("pit"));
+const truckUnlocked = () => testUnlock || NEW_LEVEL || SITE === "flood" || !!progress.truck || !!(progress.haul && progress.haul.done) || (SITE === "haul" && !!obj && obj.has("pit"));
 const KIND_ORDER = ["loader", "roller", "truck"];
 const kindOpen = (k) => k === "loader" || (k === "roller" ? rollerUnlocked() : truckUnlocked());
 function nextKind() {
@@ -1929,6 +2156,27 @@ if (SITE === "flood") {
     F.cars.length > 0 && { id: "cars", bonus: true, text: () => `Rescue the cars from the river: ${cars.filter((c, k) => job.marks.has("car" + k)).length} / ${cars.length}`, done: () => cars.every((c, k) => job.marks.has("car" + k)) },
   ].filter(Boolean), onObjective);
 }
+if (SITE === "treasure") {
+  const T = TREASURE, clue = (k) => () => (k === 0 || obj.has("c" + (k - 1)) ? `Clue ${k + 1}: ${clueText(k)}` : `Clue ${k + 1}: written on the post you dig up`);
+  obj = createObjectives([
+    { id: "c0", text: clue(0), done: () => dugOut(TCLUES[0].x, TCLUES[0].z) },
+    { id: "c1", after: ["c0"], text: clue(1), done: () => dugOut(TCLUES[1].x, TCLUES[1].z) },
+    { id: "c2", after: ["c1"], text: clue(2), done: () => dugOut(TCLUES[2].x, TCLUES[2].z) },
+    { id: "c3", after: ["c2"], text: clue(3), done: () => job.marks.has("chestUp") },
+    { id: "home", after: ["c3"], text: "Drag the chest back to the start (green ring)", done: () => { const c = tChest.body.translation(); return Math.hypot(c.x - T.home.x, c.z - T.home.z) < T.home.r; } },
+  ], onObjective);
+}
+if (SITE === "airstrip") {
+  const C = CFG.LEVELS.airstrip;
+  obj = createObjectives([
+    { id: "trees", text: () => `Fell the trees on the strip: ${standing.filter((t, k) => job.marks.has("fell" + k)).length} / ${standing.length}`, done: () => standing.every((t, k) => job.marks.has("fell" + k)) },
+    { id: "clear", after: ["trees"], text: () => `Clear the strip of logs, stumps and rocks${job.clutter != null ? `: ${job.clutter} left` : ""}`, done: () => job.clutter === 0 },
+    { id: "grade", text: () => `Cut and fill the strip level (±${Math.round(C.tol * 100)} cm)`, progress: () => (job.strip ? job.strip.grade / C.gradeNeed : 0), done: () => !!job.strip && job.strip.grade >= C.gradeNeed },
+    { id: "mud", text: "Gravel the mud patches", progress: () => (job.strip ? (job.strip.dry - 0.9) / 0.08 : 0), done: () => !!job.strip && job.strip.dry >= 0.98 },
+    { id: "pack", after: ["grade"], text: "Roll the strip firm", progress: () => (job.strip ? job.strip.pack / C.packNeed : 0), done: () => !!job.strip && job.strip.pack >= C.packNeed },
+    { id: "ready", after: ["clear", "grade", "mud", "pack"], text: "Wait for the plane", done: () => job.marks.has("landed") },
+  ], onObjective);
+}
 if (SITE === "haul") {
   const H = HAUL, P = H.pad;
   obj = createObjectives([
@@ -1954,6 +2202,8 @@ if (SITE === "ridge") {
 const OBJ_BANNER = {
   farm: { pig: "<b>Found her!</b>", tractor: "<b>Tractor rescued!</b>", gate: "<b>Gate clear!</b>", sink: "<b>Sinkhole filled!</b>", logs: "<b>Logs stacked!</b>The barn doors are open." },
   flood: { gate: "<b>Floodgate shut!</b>", breaks: "<b>Every break plugged!</b>Now hold on until the river peaks.", cars: "<b>All three cars rescued!</b>Bonus job done." },
+  treasure: { c0: "<b>A marker post!</b>Clue 2 is written on it.", c1: "<b>Another post!</b>Clue 3 is on this one.", c2: "<b>The last post!</b>It says where the chest is.", c3: "<b>The chest!</b>Winch it out of the hole." },
+  airstrip: { trees: "<b>All the trees are down!</b>", clear: "<b>Strip clear!</b>", grade: "<b>Strip level!</b>", mud: "<b>Mud gravelled!</b>", pack: "<b>Strip rolled firm!</b>" },
   haul: { ford: "<b>Ford graveled!</b>A loaded truck can cross the stream now.", pit: "<b>Pit road open!</b>The dump truck is yours.", haul: "<b>First load down!</b>",
     pads: "<b>All tent pads done!</b>Open the gates!", picnic: "<b>Picnic tables delivered!</b>Bonus job done.", hairpin: "<b>Hairpin graveled!</b>Bonus job done." },
   river: { riprap: "<b>Riprap in place!</b>The current is gentler behind it.", causeway: "<b>Causeway built!</b>Now pack it before it washes away.", pack: "<b>Causeway packed!</b>",
@@ -1970,6 +2220,7 @@ function onObjective(id, quiet) {
   const b = OBJ_BANNER[SITE] && OBJ_BANNER[SITE][id];
   if (b) { showBanner(b, 4000); sfx.ding(); }
   say(id);
+  if (SITE === "airstrip" && id === "ready") { const tier = [3, 2, 1].find((n) => job.marks.has("tier" + n)) || 2; say("done" + tier); finishLevel(); return; }
   if (SITE === "flood" && id === "hold") { job.party = 0; say("done"); finishLevel(); return; }      // the river peaked: whatever state the town is in, the job is over
   if (obj.mainDone()) { say("done"); if (SITE === "river" || SITE === "ridge" || SITE === "haul") job.party = 0; if (SITE === "haul") job.queueAtOpen = queueLen(); if (SITE === "river") sfx.cheer(); finishLevel(); }
 }
@@ -1978,6 +2229,8 @@ const starGoals = () => (CFG.LEVELS[SITE] && CFG.LEVELS[SITE].stars) || CFG.DEFA
 const bonusCount = () => (obj ? obj.bonusDone() : (flags & FL.stump ? 1 : 0) + (flags & FL.tractor ? 1 : 0));
 function starChecks() {
   if (SITE === "farm") return [true, job.time <= CFG.LEVELS.farm.targetTime, !job.pigPushed];
+  if (SITE === "treasure") return [true, job.time <= CFG.LEVELS.treasure.targetTime, !TREASURE.decoys.some((d, k) => job.marks.has("decoy" + k))];
+  if (SITE === "airstrip") { const tier = [3, 2, 1].find((n) => job.marks.has("tier" + n)) || 0; return [true, tier >= 2, tier >= 3]; }
   if (SITE === "flood") return [true, job.dry >= CFG.LEVELS.flood.dryStar, job.dry >= 0.999 && cars.every((c, k) => job.marks.has("car" + k))];
   if (SITE === "haul") { const q = job.queueAtOpen ?? queueLen(); return [true, q < CFG.LEVELS.haul.queueStar, !!job.ratings && job.ratings.every((r) => r.done && r.label === "perfect")]; }
   if (SITE === "river") return [true, (job.packed || 0) >= CFG.LEVELS.river.packStar, obj.has("cake") && !job.tiersLost];
@@ -2452,6 +2705,7 @@ function renderLegend() {
   else if (overlay.mode === "pack") elLegend.innerHTML = `<b>Packing</b>: <i style="background:#f09a3e"></i>loose <i style="background:#2fb5a8"></i>packed (roll it with the road roller) &nbsp; ${K("O")} off`;
 }
 function cycleOverlay() {
+  if (SITE === "treasure") { job.ruler = !job.ruler; return; }
   const modes = ["", ...(GRADE ? ["grade"] : []), "pack"];
   overlay.mode = modes[(modes.indexOf(overlay.mode) + 1) % modes.length];
   for (const c of chunks) buildMesh(c);
@@ -3112,8 +3366,201 @@ function checkFlood() {
   setHint(h);
 }
 
-const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep(), ridge: () => ridgeStep(), haul: () => haulStep(), flood: () => floodStep() }[SITE];
-const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver(), ridge: () => checkRidge(), haul: () => checkHaul(), flood: () => checkFlood() }[SITE];
+// ----- X Marks the Spot rules -----
+const idxAt = (x, z) => Math.round((z + HALF) / CELL) + Math.round((x + HALF) / CELL) * W;
+const dugOut = (x, z) => { const i = idxAt(x, z); return heights[i] < base[i] - 0.45; };          // the mound has been dug through
+function chestExposed() {
+  const C = TCLUES[3], top = tChest.body.translation().y + 0.45;
+  for (let dx = -0.8; dx <= 0.8; dx += 0.8) for (let dz = -0.5; dz <= 0.5; dz += 0.5) if (heightAt(C.x + dx, C.z + dz) > top + 0.25) return false;
+  return true;
+}
+const _rulerM = new THREE.Matrix4(), _rulerQ = new THREE.Quaternion(), _rulerS = new THREE.Vector3(), _rulerP = new THREE.Vector3();
+function treasureStep() {
+  const T = TREASURE, t = chassis.translation();
+  if (tMill) tMill.rotation.z += DT * 0.6;
+  // the deep river sweeps a vehicle back to the bank (the shallow one you can drive through)
+  const R = T.deep, ground = heightAt(t.x, t.z), inBand = Math.abs(t.z - R.z) < R.w + 2;
+  if (inBand && ground < R.water - 1.0 && t.y < ground + 2.4) {
+    chassis.applyImpulse({ x: 6000 * DT, y: 0, z: 0 }, true);
+    if ((safe.wet += DT) > 1.1) { hookOff(); placeLoader(safe.x, safe.z, safe.yaw); safe.wet = 0; showBanner("<b>Swept away!</b>The deep river is too deep to drive. Build a causeway with dirt from the spoil heaps.", 5000); }
+  } else {
+    safe.wet = Math.max(0, safe.wet - DT);
+    if (stepCount % 30 === 0 && !inBand && Math.abs(t.z - T.ford.z) > T.ford.w + 2) { safe.x = t.x; safe.z = t.z; safe.yaw = heading(); }
+  }
+  // the chest stays buried until it has been dug out, then it can be winched
+  if (tChest.body.isFixed() && (job.marks.has("chestUp") || (stepCount % 30 === 0 && chestExposed()))) {
+    // sit it on whatever dirt is left under it first: freed while partly buried, physics would fling it out
+    const p = tChest.body.translation(); let floor = -99;
+    for (let dx = -1.1; dx <= 1.1; dx += 0.55) for (let dz = -0.8; dz <= 0.8; dz += 0.4) floor = Math.max(floor, heightAt(p.x + dx, p.z + dz));
+    tChest.body.setTranslation({ x: p.x, y: Math.max(p.y, floor + 0.5), z: p.z }, true);
+    job.marks.add("chestUp"); tChest.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true); tChest.body.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  }
+  // compass and car-length ruler
+  const hd = heading(), deg = ((hd * 180) / Math.PI + 360) % 360, dir = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"][Math.round(deg / 45) % 8];
+  if (stepCount % 6 === 0) tCompass.innerHTML = `<span class="cdir">${dir}</span> ${Math.round(deg)}&deg; &nbsp; <span class="sub">${K("O")} car-length ruler ${job.ruler ? "on" : "off"}</span>`;
+  tRuler.visible = !!job.ruler;
+  if (job.ruler) {
+    const fx = Math.sin(hd), fz = Math.cos(hd);
+    _rulerQ.setFromAxisAngle(_ry, hd);
+    for (let k = 0; k < 12; k++) {
+      const d = 3 + k * CAR, x = t.x + fx * d, z = t.z + fz * d, big = (k + 1) % 5 === 0;
+      tRuler.setMatrixAt(k, _rulerM.compose(_rulerP.set(x, heightAt(x, z) + 0.12, z), _rulerQ, _rulerS.set(big ? 3.2 : 1.8, 1, 1)));
+    }
+    tRuler.instanceMatrix.needsUpdate = true;
+  }
+  if (!job.moved && Math.hypot(t.x - T.spawn.x, t.z - T.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+// each player sees half of each clue when there's a crew (solo, the whole clue)
+function clueText(k) {
+  const c = TCLUES[k], split = net.online && net.roster.length > 1;
+  if (!split) return `${c.a} ${c.b}`;
+  return me.slot % 2 === 0 ? `${c.a} <span class="sub">(a friend has the rest)</span>` : `<span class="sub">(a friend has the start)</span> ${c.b}`;
+}
+function checkTreasure() {
+  const T = TREASURE;
+  // posts dug up pop out of the ground; decoys turn up junk
+  TCLUES.forEach((C, k) => { if (!C.chest && tPosts[k] && obj.has("c" + k) && !tPosts[k].visible) { tPosts[k].visible = true; tPosts[k].position.y = heightAt(C.x, C.z) - 0.3; } });
+  T.decoys.forEach(([x, z], k) => {
+    if (!job.marks.has("decoy" + k) && dugOut(x, z)) job.marks.add("decoy" + k);
+    if (job.marks.has("decoy" + k) && !tJunk[k].visible) {
+      tJunk[k].visible = true; tJunk[k].position.y = heightAt(x, z) + 0.3;
+      if (running) { showBanner(`<b>Not treasure.</b>Just ${T.junk[k]}.`, 3000); popups.say("hinston", ["Ha! That's not it.", "Arr, that one's a fake.", "Keep looking, matey."][k % 3] + ` It's ${T.junk[k]}.`); }
+    }
+  });
+  obj.update();
+  const cp = tChest.body.translation();
+  homeMarker.beam.visible = obj.has("c3");
+  elTasks.innerHTML = `<h2>X Marks the Spot</h2>${obj.render()}${starsHtml(obj.mainDone())}
+    <div class="sub">One car length = ${CAR} m (a loader). ${K("O")} shows a ruler ahead of you.</div>
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  const cur = obj.current(), id = cur && cur.id, t = chassis.translation();
+  let h = "";
+  if (!job.moved) h = `Captain Hinston's treasure map is all clues. Read clue 1 (top left), find the landmark, and measure in <b>car lengths</b>: ${K("O")} lays a ruler in front of you, and the compass shows which way you face.`;
+  else if (id && id.startsWith("c") && id !== "c3") h = `Find the spot, then dig: lower the bucket ${K("&darr;")} into the little mound. Real clues have a marker post under them. Some mounds are decoys!`;
+  else if (id === "c3") h = Math.abs(t.z - T.deep.z) < 12 && t.z < T.deep.z
+    ? `The deep river is too deep to drive. Build a causeway: dirt from the spoil heaps beside it, tipped into the water until a strip reaches the far side.`
+    : `The chest is 2 m down: dig a ramp into the hole so the loader can keep going deeper. Too heavy to scoop: once it's uncovered, winch it out.`;
+  else if (id === "home") h = cp.y < heightAt(cp.x, cp.z) - 0.6
+    ? `There it is! Hook the chest with your winch ${K("E")} from the top of the hole and reel it out ${K("Q")}.`
+    : `Drag the chest all the way back to the start (green ring). Over your causeway, through the shallow river.`;
+  setHint(h);
+}
+
+// ----- No Questions Asked rules -----
+let stripCells = null;
+function stripStats() {
+  const S = AIR.strip;
+  if (!stripCells) { stripCells = []; for (let x = S.x0; x <= S.x1; x += 1) for (let z = S.z - S.half + 0.5; z <= S.z + S.half - 0.5; z += 1) stripCells.push(idxAt(x, z), x, z); }
+  let on = 0, firmN = 0, fill = 0, dry = 0, n = 0;
+  for (let k = 0; k < stripCells.length; k += 3) {
+    const i = stripCells[k], x = stripCells[k + 1], z = stripCells[k + 2];
+    n++; if (Math.abs(heights[i] - S.level) <= CFG.LEVELS.airstrip.tol) on++;
+    if (heights[i] > base[i] + 0.05) { fill++; if (pack[i] >= 0.7) firmN++; }      // only new dirt needs rolling: the jungle floor is already firm
+    if (sample(mudA, x, z) * (1 - smooth(0.03, 0.12, gravH[i])) < 0.35) dry++;
+  }
+  return { grade: on / n, pack: fill ? firmN / fill : 0, fill: fill / n, dry: dry / n };
+}
+function stripClutter() {
+  const S = AIR.strip; let n = 0;
+  for (const p of props) {
+    if (!p.active || !["log", "stump", "rock", "boulder", "standing"].includes(p.type)) continue;
+    const t = p.body.translation();
+    if (t.x > S.x0 - 1 && t.x < S.x1 + 1 && Math.abs(t.z - S.z) < S.half + 0.5) n++;
+  }
+  return n;
+}
+function fellTree(t, k) {
+  if (!t.active) return;
+  t.active = false; t.body.setEnabled(false); t.mesh.visible = false;
+  if (winch.on && winch.kind === 1 && winch.ref === t.index) hookOff();
+  for (const p of [t.log, t.stump]) { p.active = true; p.body.setEnabled(true); p.mesh.visible = true; }
+  if (running) { sfx.thunk(); showBanner(`<b>Timber!</b>${t.giant ? "The giant tree is down." : "Now drag the log off the strip and pull the stump."}`, 2500); }
+}
+function airStep() {
+  const A = AIR, C = CFG.LEVELS.airstrip, t = chassis.translation();
+  smashRocks();
+  // trees come down under a strong enough pull; the giant needs two winches, or one held at full power for a while
+  standing.forEach((tr, k) => {
+    if (job.marks.has("fell" + k)) { fellTree(tr, k); }
+    else {
+      const T2 = pullOn(tr), need = tr.giant ? C.giantPull : C.treePull;
+      tr.pullT = T2 > need ? tr.pullT + DT : tr.giant && T2 > C.treePull * 1.8 ? tr.pullT + DT / C.giantSlow : Math.max(0, tr.pullT - DT);
+      if (tr.pullT > 0.8) job.marks.add("fell" + k);
+    }
+    const st = tr.stump;
+    if (st.active && !st.body.isDynamic()) {
+      if (job.marks.has("stump" + k)) st.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true);
+      else { st.pullT = pullOn(st) > C.stumpPull ? (st.pullT || 0) + DT : 0; if (st.pullT > 0.8) job.marks.add("stump" + k); }
+    }
+  });
+  // showers: on a fixed clock, so every player gets the same weather
+  const sh = A.showers, cyc = job.time % sh.every, raining = job.time > 60 && cyc > sh.every - sh.len && job.party == null;
+  rainWet = clamp(rainWet + (raining ? DT / 8 : -DT / 25), 0, 1);
+  if (raining && !job.rainSeen) { job.rainSeen = true; say("rain"); }
+  airRain.visible = rainWet > 0.05;
+  if (airRain.visible) {
+    const cp = camera.position, drops = airRain.userData.drops;
+    for (let k = 0; k < drops.length; k++) { const d = drops[k]; d[1] -= 22 * DT; if (d[1] < -5) d[1] += 30; _m.makeTranslation(cp.x + d[0], cp.y + d[1] - 8, cp.z + d[2]); airRain.setMatrixAt(k, _m); }
+    airRain.instanceMatrix.needsUpdate = true; airRain.material.opacity = 0.5 * rainWet;
+  }
+  if (job.time > C.earlyAt && !job.earlySeen) { job.earlySeen = true; say("early"); }
+  // the plane comes in once the strip is ready (a scripted landing: how well depends on the strip)
+  if (job.planeT != null) planeStep();
+  if (!job.moved && Math.hypot(t.x - A.spawn.x, t.z - A.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function planeStep() {
+  const S = AIR.strip, tier = [3, 2, 1].find((n) => job.marks.has("tier" + n)) || 2;
+  job.planeT += DT;
+  const tt = job.planeT;
+  plane.visible = true;
+  let x, y, roll = 0;
+  if (tt < 8) { const u = tt / 8; x = lerp(150, 60, u); y = lerp(30, stripSurface(60), u * u * (3 - 2 * u)); }
+  else {
+    const u = Math.min(1, (tt - 8) / 10); x = lerp(60, -45, 1 - (1 - u) * (1 - u)); y = S.level;
+    const bounces = tier === 3 ? 0 : tier === 2 ? 1 : 3, b = (tt - 8) * 1.6;
+    if (b < bounces) y += Math.abs(Math.sin(b * Math.PI)) * (tier === 1 ? 1.4 : 0.6) * (1 - b / (bounces + 0.5));
+    if (tier === 1) roll = Math.sin(tt * 6) * 0.08 * (1 - u);
+  }
+  plane.position.set(x, y, S.z); plane.rotation.set(roll, Math.PI, tt < 8 ? 0.08 : 0);
+  if (tier === 1 && tt > 9 && planeWheel.parent === plane) {           // a rough strip costs it a wheel
+    plane.remove(planeWheel); scene.add(planeWheel); planeWheel.position.set(x - 4.5, y + 0.4, S.z); planeWheel.userData.v = [-9, 3];
+  }
+  if (planeWheel.parent === scene) { const v = planeWheel.userData.v; v[1] -= 9.8 * DT; planeWheel.position.x += v[0] * DT; planeWheel.position.y = Math.max(heightAt(planeWheel.position.x, S.z) + 0.3, planeWheel.position.y + v[1] * DT); if (planeWheel.position.y <= heightAt(planeWheel.position.x, S.z) + 0.31) v[1] = Math.abs(v[1]) * 0.4; planeWheel.rotation.z -= DT * 10; }
+  if (tt > 19) job.marks.add("landed");
+}
+function checkAir() {
+  const A = AIR, C = CFG.LEVELS.airstrip, st = (job.strip = stripStats());
+  job.clutter = stripClutter();
+  obj.update();
+  if (obj.ready("ready") && !obj.has("ready") && job.planeT == null) {
+    if (![1, 2, 3].some((n) => job.marks.has("tier" + n))) job.marks.add("tier" + (st.grade >= C.smooth.grade && st.pack >= C.smooth.pack ? 3 : st.grade >= C.good.grade && st.pack >= C.good.pack ? 2 : 1));
+    job.planeT = 0; say("inbound");
+  }
+  const fell = standing.filter((tr, k) => job.marks.has("fell" + k)).length;
+  elTasks.innerHTML = `<h2>No Questions Asked</h2>${obj.render()}
+    <div class="sub">Strip: ${Math.round(st.grade * 100)}% level &middot; ${Math.round(st.pack * 100)}% firm${rainWet > 0.2 ? ' &middot; <span class="hot">raining: loose dirt is turning to mud</span>' : ""}</div>
+    ${starsHtml(obj.mainDone())}
+    <div class="sub">Time ${clock(job.time)} &nbsp; ${K("O")} grade overlay</div>
+    <button id="leave">Back to the quarry</button>`;
+  const cur = obj.current(), id = cur && cur.id;
+  let h = "";
+  if (!job.moved) h = `Señor Pinstón needs a runway. The strip is marked with white cones. Start with the trees standing on it.`;
+  else if (id === "trees") h = target && target.ref != null && props[target.ref] && props[target.ref].giant
+    ? `The giant tree won't come down for one winch. Two friends winching together will do it, or hold ${K("Q")} at full power for a long while.`
+    : `Fell a tree: turn your back to it, hook it with ${K("E")}, brake ${K("Space")} and reel in ${K("Q")} hard. ${fell} / ${standing.length} down.`;
+  else if (id === "clear") h = `Drag the logs off the strip, pull the stumps out with your winch (then drag them off), and crush or push the rocks away. ${job.clutter} things left on the strip.`;
+  else if (id === "grade") h = `Cut the humps and fill the hollows: ${K("O")} shows red too high, blue too low, green within ${Math.round(C.tol * 100)} cm. Push dirt from the humps into the hollows.`;
+  else if (id === "mud") h = `Two mud patches on the strip. Spread gravel on them: the heap south of the strip, and the dump truck (${K("F")} at a purple yard) carries a lot.`;
+  else if (id === "pack") h = `Roll the strip firm with the road roller (${K("F")} at a purple yard). Packed dirt doesn't turn to mud in the rain.`;
+  else if (id === "ready") h = "";
+  setHint(h);
+}
+
+const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep(), ridge: () => ridgeStep(), haul: () => haulStep(), flood: () => floodStep(), treasure: () => treasureStep(), airstrip: () => airStep() }[SITE];
+const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver(), ridge: () => checkRidge(), haul: () => checkHaul(), flood: () => checkFlood(), treasure: () => checkTreasure(), airstrip: () => checkAir() }[SITE];
 function checkHub() {
   const rows = houses.map((hs) => {
     const p = progress[hs.id];
@@ -3314,4 +3761,4 @@ window.__game = { SITE, world, chassis, vehicle, props, anchors, boulders, logs,
   run(steps, set = {}) { Object.assign(input, set); for (let i = 0; i < steps; i++) physicsStep(); syncVisuals(DT); target = !winch.on ? findTarget() : null; siteCheck(); },
   render() { renderer.render(scene, camera); },
   refreshTerrain() { for (const c of chunks) { buildCollider(c); buildMesh(c); } },          // after a test edits heights directly
-  marks: () => job.marks };
+  marks: () => job.marks, TREASURE, TCLUES, TLAYOUT, tChest: () => tChest, AIR, standing, stripRocks, stripStats, stripClutter, get rainWet() { return rainWet; } };

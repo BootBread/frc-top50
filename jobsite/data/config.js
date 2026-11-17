@@ -3,6 +3,18 @@
 // Stars: 1 is always "finish the level". Levels not listed use DEFAULT_STARS (one star per bonus job).
 export const DEFAULT_STARS = ["Finish the job", "Do one bonus job", "Do both bonus jobs"];
 export const LEVELS = {
+  treasure: {
+    stars: ["Find the treasure", "Get it home in under 20:00", "Never dig up a decoy"],
+    targetTime: 1200,
+  },
+  airstrip: {
+    stars: ["Land the plane", "A good landing", "A perfect landing"],
+    tol: 0.3,                      // metres either side of the strip's level that count as level
+    gradeNeed: 0.85, packNeed: 0.8, // share of the strip that must be level / firm
+    good: { grade: 0.92, pack: 0.88 }, smooth: { grade: 0.97, pack: 0.95 },   // landing quality
+    treePull: 30000, giantPull: 75000, giantSlow: 5, stumpPull: 38000,       // N; the giant also falls to one winch held over 54 kN for about 5 s
+    earlyAt: 420,                  // seconds: when Señor Pinstón says the plane is early
+  },
   farm: {
     stars: ["Help Grandma Dinston", "Finish in under 10:00", "Never get stuck in the mud"],
     targetTime: 600,               // seconds, for the second star

@@ -16,5 +16,6 @@ export const CHARACTERS = {
   pajaro: { name: "Señor Pinstón", color: "#7de0c9", blip: 380, face: dress({ hair: "slick", hairColor: "#141414", glasses: "shades", moustache: true, mouth: "flat", shirt: "#e8e1d0", bg: "#2f5a52" }) },
   gus:    { name: "Old Ginston", color: "#e8b06a", blip: 240, face: dress({ hair: "none", hairColor: "#eeeeee", beard: true, hat: "cowboy", hatColor: "#9a6a3a", shirt: "#7a4b2a", bg: "#6b5537" }) },
   ada:    { name: "Station Master Kinston", color: "#c9a6ff", blip: 500, face: dress({ hat: "cap", hatColor: "#2e3a7a", shirt: "#2e3a7a", bowtie: "#ffc928", bg: "#3c3f5c" }) },
+  hinston: { name: "Captain Hinston", color: "#e8c87a", blip: 360, face: dress({ hat: "pirate", hatColor: "#1d232b", eyepatch: true, beard: true, shirt: "#d8333a", bg: "#2b4a6b" }) },
   lou:    { name: "Rancher Linston", color: "#ff9c6a", blip: 300, face: dress({ hat: "cowboy", hatColor: "#5a3d26", shirt: "#b8462e", shawl: "#d9c27a", bg: "#5c3b2e" }) },
 };

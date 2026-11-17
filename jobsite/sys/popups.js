@@ -103,11 +103,16 @@ export function drawFace(cv, c) {
   if (f.mouth === "flat") { g.moveTo(56, 82); g.lineTo(72, 82); } else g.arc(64, 74, 10, 0.2 * Math.PI, 0.8 * Math.PI);
   g.stroke();
   ell(46, 72, 5, 3, "rgba(230,110,110,.35)"); ell(82, 72, 5, 3, "rgba(230,110,110,.35)");   // cheeks
+  if (f.eyepatch) { g.fillStyle = "#1d232b"; g.beginPath(); g.ellipse(75, 61, 8, 7, 0, 0, Math.PI * 2); g.fill(); g.strokeStyle = "#1d232b"; g.lineWidth = 2; g.beginPath(); g.moveTo(34, 50); g.lineTo(94, 66); g.stroke(); }
   if (f.flower) { ell(84, 36, 6, 6, f.flower); ell(84, 36, 2.5, 2.5, "#ffe066"); }
   // hats
   const hc = f.hatColor || "#c94a3a";
   if (f.hat === "cap") { ell(64, 40, 31, 20, hc, Math.PI, Math.PI * 2); g.fillStyle = hc; g.fillRect(33, 38, 62, 5); ell(82, 42, 22, 5, hc); }
   if (f.hat === "hardhat") { ell(64, 42, 33, 26, hc, Math.PI, Math.PI * 2); ell(64, 42, 40, 6, hc); g.fillStyle = "rgba(0,0,0,.15)"; g.fillRect(61, 17, 6, 25); }
+  if (f.hat === "pirate") {                                                     // a tricorn with a skull badge
+    g.fillStyle = hc; g.beginPath(); g.moveTo(22, 40); g.quadraticCurveTo(64, 2, 106, 40); g.quadraticCurveTo(64, 28, 22, 40); g.fill();
+    ell(64, 26, 5, 5, "#f4f1ea"); g.fillStyle = "#f4f1ea"; g.fillRect(58, 31, 12, 2);
+  }
   if (f.hat === "ranger" || f.hat === "cowboy") {
     ell(64, 38, 48, f.hat === "cowboy" ? 9 : 7, hc);
     g.fillStyle = hc; g.beginPath(); g.moveTo(42, 38); g.lineTo(47, 14); g.lineTo(f.hat === "cowboy" ? 64 : 81, f.hat === "cowboy" ? 20 : 14); if (f.hat === "cowboy") g.lineTo(81, 14); g.lineTo(86, 38); g.fill();
