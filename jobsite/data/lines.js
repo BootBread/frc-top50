@@ -18,7 +18,7 @@ export const LINES = {
   },
   river: {
     start: [
-      ["mia", "Hi! I'm Mia, and this is our wedding day. The storm took the bridge, and our cake is on the wrong side."],
+      ["mia", "Hi! I'm Minston, and this is our wedding day. The storm took the bridge, and our cake is on the wrong side."],
       ["theo", "Dirt washes straight away in that current. Rocks upstream would calm it. Probably. I'm an accountant."],
     ],
     riprap: [["theo", "Look, the water's slower behind the boulders. Told you. Probably."]],
@@ -34,7 +34,7 @@ export const LINES = {
   flood: {
     start: [
       ["bea", "It's the storm again. The river is rising behind the levee, and the whole town is down here."],
-      ["bea", "Shut the floodgate with the big wheel, and plug the breaks. Everyone we helped is counting on us."],
+      ["bea", "Wind the floodgate shut with the big wheel, and plug the breaks. Watch the river for cars, too."],
     ],
     late: [["bea", "The levee just gave way at the east end! There's a new break."]],
     gate: [["bea", "Gate's shut. Now those breaks."]],
@@ -42,8 +42,8 @@ export const LINES = {
     done: [
       ["bea", "It's peaked. The rain's stopping. The water's going down."],
       ["dot", "My barn's still standing! Clementine sends her love. Mostly mud."],
-      ["mia", "You saved our car, and the town. That's two favours we owe you."],
-      ["walt", "June says you'd better come up for tea. That's an order."],
+      ["mia", "You saved our car, and the town. We owe you a cake. A whole one, this time."],
+      ["walt", "Jinston says you'd better come up for tea. That's an order."],
       ["ranger", "Campground's dry too. Not a single tent floated off."],
     ],
   },
@@ -64,7 +64,7 @@ export const LINES = {
   ridge: {
     start: [
       ["june", "That's our cabin by the road. Forty years in the valley, and now we're moving up the ridge."],
-      ["walt", "The storm dumped half the hill on the road. Take your time. Nobody's in a hurry but June."],
+      ["walt", "The storm dumped half the hill on the road. Take your time. Nobody's in a hurry but Jinston."],
     ],
     slide: [["walt", "Ha! A road again. Don't waste that dirt, the gully further up will want every scoop."]],
     gully: [["june", "Smooth as a pancake. The cabin's ready when you are."]],

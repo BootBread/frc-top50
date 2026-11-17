@@ -61,7 +61,7 @@ const HUB = {
   mound: { x: 20, z: -12, r: 7, h: 3.2 },
   field: { x: -40, z: 34, r: 24 },
 };
-// ----- level 1: Muddle Acres, "After the Storm". Grandma Dot's farm, one short lesson per job.
+// ----- level 1: Muddle Acres, "After the Storm". Grandma Dinston's farm, one short lesson per job.
 const FARM = {
   spawn: { x: 0, z: -72, yaw: 0 },
   // 1 drive: Clementine the pig got out; her hoofprints lead from the pen to where she is
@@ -218,17 +218,17 @@ function haulDesign(x, z) {
 const FLOOD = {
   spawn: { x: 0, z: -62, yaw: 0 },
   levee: { z: 22, crest: 2.6 },
-  breaches: [{ x: -40, w: 3, floor: 1.3, name: "west break" }, { x: -8, w: 4, floor: 0.8, name: "middle break" }, { x: 40, w: 3, floor: 1.4, name: "east break" }],
-  late: { x: 64, w: 3, floor: 1.2, at: 0.55, name: "new break" },          // opens part-way through the rise
+  breaches: [{ x: -36, w: 7, floor: 0.9, name: "west break" }, { x: 2, w: 9, floor: 0.4, name: "middle break" }, { x: 38, w: 7, floor: 1.0, name: "east break" }],
+  late: { x: 64, w: 6, floor: 0.8, at: 0.55, name: "new break" },          // opens part-way through the rise
   gate: { x: 20, w: 4 }, wheel: { x: 26, z: 15 },
   borrow: [{ x: -26, z: -4, r: 11, h: 4.2 }, { x: 56, z: -6, r: 10, h: 4.2 }],
-  riprap: [[-36, 27, 1.0], [-44, 27.5, 0.95], [-5, 27, 1.05], [-11, 27.5, 1.0], [44, 27, 1.0], [60, 27.5, 1.05]],
+  riprap: [[-33, 27, 1.0], [-40, 27.5, 0.95], [-2, 27, 1.05], [6, 27.5, 1.0], [42, 27, 1.0], [61, 27.5, 1.05]],
   // an empty pasture west of the town, behind its own bank: dig through the levee there to let the river in
-  pasture: { x0: -88, x1: -57, z0: -24, z1: 17, floor: -0.8 }, berm: { x: -54 }, spill: { x0: -76, x1: -61 },
-  cars: [{ at: 0.18, color: 0x3b8fe0, name: "Mia and Theo's car", cans: true }, { at: 0.38, color: 0xd8333a, name: "red car" }, { at: 0.6, color: 0x52b45a, name: "green car" }],
-  weir: 72, carStart: { x: -72, z: 34 },
+  pasture: { x0: -88, x1: -59, z0: -24, z1: 17, floor: -0.8 }, berm: { x: -54, half: 4.5, h: 4.2 }, spill: { x0: -76, x1: -61 },
+  cars: [{ at: 0.08, color: 0x3b8fe0, name: "Minston and Tinston's car", cans: true }, { at: 0.28, color: 0xd8333a, name: "red car" }, { at: 0.48, color: 0x52b45a, name: "green car" }],
+  weir: 72, carStart: { x: -58, z: 34 },
   homes: [[-40, -30, 1], [-14, -38, 1], [14, -30, 1], [42, -38, 1], [-34, -60, 1], [62, -50, 1], [12, -66, 1], [64, -16, 1]],
-  water: { start: -1.2, peak: 2.0, riseSolo: 1440, hold: 40, grace: 45 },
+  water: { start: -2.0, peak: 2.0, riseSolo: 1080, hold: 40, grace: 45 },      // starts low, rises faster
   trees: [[70, -20], [-26, -50], [30, -58], [0, -30], [74, 8], [-44, -76], [44, -74]],
   yards: [{ x: 24, z: -64, r: 5.5 }, { x: 4, z: -8, r: 5.5 }],
 };
@@ -241,12 +241,12 @@ function floodDesign(x, z) {
   h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
   const Pa = F.pasture, inPa = Math.min(x - Pa.x0, Pa.x1 - x, z - Pa.z0, Pa.z1 - z);
   h = lerp(h, Pa.floor, smooth(-4, 3, inPa));                                                    // the low pasture
-  const berm = smooth(2.6, 0.6, Math.abs(x - F.berm.x)) * smooth(L2.z + 1, L2.z - 3, z) * smooth(Pa.z0 - 6, Pa.z0, z);
-  h = Math.max(h, lerp(h, 3.2, berm));                                                           // its bank, between pasture and town
+  const berm = smooth(F.berm.half, F.berm.half - 2, Math.abs(x - F.berm.x)) * smooth(L2.z + 1, L2.z - 3, z) * smooth(Pa.z0 - 6, Pa.z0, z);
+  h = Math.max(h, lerp(h, F.berm.h, berm));                                                           // its bank, between pasture and town
   const dzl = Math.abs(z - L2.z), shape = smooth(4.3, 0.75, dzl);
   let crest = L2.crest;
   for (const b of F.breaches) crest = lerp(crest, Math.min(crest, b.floor), smooth(b.w / 2 + 1.6, b.w / 2, Math.abs(x - b.x)));
-  if (Math.abs(x - F.gate.x) < F.gate.w / 2 + 0.9) crest = 0;                                      // the floodgate slot
+  if (F.gate && Math.abs(x - F.gate.x) < F.gate.w / 2 + 0.9) crest = 0;                                      // the floodgate slot
   h += crest * shape;
   let loose = 0;
   for (const B of F.borrow) loose += B.h * Math.max(0, 1 - (Math.hypot(x - B.x, z - B.z) / B.r) ** 1.6);
@@ -853,7 +853,7 @@ if (SITE === "hub") {
   for (const mk of [sinkMarker, pileMarker, spotMarker, gateMarker]) mk.ring.visible = mk.beam.visible = false;     // each shows when its job comes up
   // props, always in the same order so every player's copy matches
   tractor = addTractor(F.tractor.x, F.tractor.z);
-  tractor.name = "Dot's tractor";
+  tractor.name = "Dinston's tractor";
   gateRock = addRock(F.gateRock.x, F.gateRock.z, F.gateRock.r, "boulder");
   for (const [x, z, len, rad, yaw] of F.logs) logs.push(addLog(x, z, len, rad, yaw));
 }
@@ -891,7 +891,7 @@ if (SITE === "river") {
       const h = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 8), lam(head)); h.position.y = 1.32; p.add(h);
       p.userData.y0 = p.position.y; guests.push(p); return p;
     };
-    person(W2.x - 0.6, W2.z + 6, 0xffffff, 0x8d5a3b); person(W2.x + 0.6, W2.z + 6, 0x2f4a6b);          // Mia and Theo
+    person(W2.x - 0.6, W2.z + 6, 0xffffff, 0x8d5a3b); person(W2.x + 0.6, W2.z + 6, 0x2f4a6b);          // Minston and Tinston
     for (let k = 0; k < 10; k++) person(W2.x - 5 + (k % 5) * 2.5, W2.z - 1 + Math.floor(k / 5) * 2.2, colors[k], [0xe0b48d, 0x8d5a3b, 0xc98d64, 0xf0c7a6][k % 4]);
     for (const tx of [-7, 7]) { const t = new THREE.Mesh(new THREE.BoxGeometry(3, 0.8, 1.2), white); t.position.set(W2.x + tx, heightAt(W2.x + tx, W2.z + 2) + 0.4, W2.z + 2); t.castShadow = true; scene.add(t); }
     // their car, which drives home across your causeway at the end
@@ -1044,7 +1044,12 @@ if (SITE === "flood") {
   const Pa = F.pasture;
   pastureWater = new THREE.Mesh(new THREE.PlaneGeometry(Pa.x1 - Pa.x0 + 6, Pa.z1 - Pa.z0 + 6), wmat);
   pastureWater.rotation.x = -Math.PI / 2; pastureWater.position.set((Pa.x0 + Pa.x1) / 2, -5, (Pa.z0 + Pa.z1) / 2); pastureWater.visible = false; scene.add(pastureWater);
-  { const s = makeSign(4.4, 1.15); s.userData.draw("Pasture", "Empty: nobody lives here", "#c9d1da"); s.position.set(F.berm.x + 1.2, 2.9, -6); s.rotation.y = Math.PI / 2; scene.add(s); }
+  {                                                // the pasture sign, on a post on the town side of its bank
+    const sx = F.berm.x + F.berm.half + 1.5, sz = -4, y = heightAt(sx, sz);
+    const s = makeSign(4.4, 1.15); s.userData.draw("Pasture", "Empty: nobody lives here", "#c9d1da"); s.position.set(sx, y + 2.6, sz); s.rotation.y = Math.PI / 2; scene.add(s);
+    const pole = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.2, 0.16), lam(0x8a6a44)); pole.position.set(sx + 0.1, y + 1.1, sz); scene.add(pole);
+  }
+  if (F.gate) {
   // the floodgate slot between two concrete walls; the gate panel hangs above it until you wind it down
   const concrete = lam(0xa9adb3), gx = F.gate.x, gz = F.levee.z;
   for (const e of [-1, 1]) {
@@ -1062,13 +1067,14 @@ if (SITE === "flood") {
     anchors.push({ pos: new THREE.Vector3(W3.x, y + 2.2, W3.z), name: "floodgate wheel" }); wheelAnchor = anchors.length - 1;
     const s = makeSign(3.4, 0.9); s.userData.draw("Floodgate", "Hook and reel to close"); s.position.set(0, 3.6, 0.3); g.add(s);
   }
+  }
   for (const b of [...F.breaches, F.late]) { const mk = marker(b.x, F.levee.z, 0.5, 0xffa23a); mk.ring.visible = false; breachBeams.push(mk.beam); }
   breachBeams[3].visible = false;
-  const gm = marker(gx, gz, 0.5, 0xffa23a); gm.ring.visible = false; breachBeams.push(gm.beam);
+  if (F.gate) { const gm = marker(F.gate.x, F.levee.z, 0.5, 0xffa23a); gm.ring.visible = false; breachBeams.push(gm.beam); }
   lowBeam = marker(0, F.levee.z, 0.5, 0xff4a3a).beam; lowBeam.visible = false;
-  // places from earlier jobs, across the river: Dot's barn and the wedding arch
+  // places from earlier jobs, across the river: Dinston's barn and the wedding arch
   {
-    const barnFar = building({ x: -46, z: 86, w: 10, d: 8, h: 6, door: 4, dh: 3.5, face: -1, wall: 0xa8392c, roof: 0x5b5f66 }); barnFar.sign.userData.draw("Muddle Acres", "Grandma Dot's", "#ff9cc4");
+    const barnFar = building({ x: -46, z: 86, w: 10, d: 8, h: 6, door: 4, dh: 3.5, face: -1, wall: 0xa8392c, roof: 0x5b5f66 }); barnFar.sign.userData.draw("Muddle Acres", "Grandma Dinston's", "#ff9cc4");
     const ay = heightAt(30, 86), arch = new THREE.Mesh(new THREE.TorusGeometry(2.2, 0.18, 6, 18, Math.PI), lam(0xff9cc4)); arch.position.set(30, ay + 3.2, 86); scene.add(arch);
   }
   // rain: a few hundred streaks around the camera (it stops at the end)
@@ -1084,6 +1090,7 @@ if (SITE === "flood") {
     for (const [sx, sz] of [[1, 1.3], [-1, 1.3], [1, -1.3], [-1, -1.3]]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.3, 12).rotateZ(Math.PI / 2), tyreMat); w.position.set(sx * 0.95, -0.45, sz); c.mesh.add(w); }
     if (C.cans) for (let k = 0; k < 3; k++) { const can = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.5, 6).rotateX(Math.PI / 2), lam(0xd9d9d9)); can.position.set(-0.4 + k * 0.4, -0.3, -2.2); c.mesh.add(can); }
     c.active = false; c.body.setEnabled(false); c.mesh.visible = false; c.spec = C;
+    c.beam = marker(0, 0, 0.5, 0x5fd0ff).beam; c.beam.visible = false;
     cars.push(c);
   }
 }
@@ -1855,7 +1862,7 @@ if (SITE === "farm") {
   const near = (p, o, r) => { const t = p.body.translation(); return Math.hypot(t.x - o.x, t.z - o.z) < r; };
   obj = createObjectives([
     { id: "pig", text: "Follow the hoofprints and find Clementine the pig", done: () => { const t = chassis.translation(); return near(pig, { x: t.x, z: t.z }, 6); } },
-    { id: "tractor", after: ["pig"], text: "Winch Dot's tractor out of the mud onto the green ring", done: () => near(tractor, F.tractorSpot, F.tractorSpot.r) },
+    { id: "tractor", after: ["pig"], text: "Winch Dinston's tractor out of the mud onto the green ring", done: () => near(tractor, F.tractorSpot, F.tractorSpot.r) },
     { id: "gate", after: ["tractor"], text: "Push the boulder out of the paddock gate", done: () => !near(gateRock, F.gateZone, F.gateZone.r + 0.3) },
     { id: "sink", after: ["gate"], text: "Fill the sinkhole by the well", progress: () => job.fill / 0.92, done: () => job.fill >= 0.92 },
     { id: "logs", after: ["sink"], text: () => `Winch the fallen trees onto the woodpile: ${job.logsIn} / ${logs.length}`, done: () => job.logsIn >= logs.length },
@@ -1877,12 +1884,12 @@ if (SITE === "river") {
 if (SITE === "flood") {
   const F = FLOOD;
   obj = createObjectives([
-    { id: "gate", text: "Wind the floodgate shut (winch on the red wheel)", progress: () => job.gateClose, done: () => job.gateClose >= 1 },
+    F.gate && { id: "gate", text: "Wind the floodgate shut (winch on the red wheel)", progress: () => job.gateClose, done: () => job.gateClose >= 1 },
     { id: "breaks", text: () => { const l = floodBreaks(), cr = job.crest; const ok = cr ? l.filter((b, n) => cr.per[n] >= F.water.peak + 0.1).length : 0; return `Plug the breaks above the peak: ${ok} / ${l.length}${job.marks.has("late") ? "" : " (so far)"}`; },
       done: () => { const cr = job.crest; return !!cr && job.marks.has("late") && floodBreaks().every((b, n) => cr.per[n] >= F.water.peak + 0.1); } },
     { id: "hold", text: () => job.water >= F.water.peak ? `Hold until the river falls: ${Math.max(0, F.water.hold - job.hold).toFixed(0)} s` : "Hold the river until it peaks", done: () => job.hold > F.water.hold },
-    { id: "cars", bonus: true, text: () => `Rescue the cars from the river: ${cars.filter((c, k) => job.marks.has("car" + k)).length} / ${cars.length}`, done: () => cars.every((c, k) => job.marks.has("car" + k)) },
-  ], onObjective);
+    F.cars.length > 0 && { id: "cars", bonus: true, text: () => `Rescue the cars from the river: ${cars.filter((c, k) => job.marks.has("car" + k)).length} / ${cars.length}`, done: () => cars.every((c, k) => job.marks.has("car" + k)) },
+  ].filter(Boolean), onObjective);
 }
 if (SITE === "haul") {
   const H = HAUL, P = H.pad;
@@ -2486,7 +2493,7 @@ function farmEffect(id) {
   const F = FARM, Pn = F.pen, show = (mk, on) => { if (mk) mk.ring.visible = mk.beam.visible = on; };
   if (id === "pig") {
     show(penMarker, false); show(spotMarker, true); if (!penGate) penGate = fenceLine(Pn.x0, Pn.gate0, Pn.x0, Pn.gate1, 0.1);
-    const px = Pn.x1 - 3, pz = Pn.z0 + 3; pig.body.setTranslation({ x: px, y: heightAt(px, pz) + 0.62, z: pz }, true);      // Dot has walked her home
+    const px = Pn.x1 - 3, pz = Pn.z0 + 3; pig.body.setTranslation({ x: px, y: heightAt(px, pz) + 0.62, z: pz }, true);      // Dinston has walked her home
   }
   if (id === "tractor") { show(spotMarker, false); show(gateMarker, true); }
   if (id === "gate") { show(gateMarker, false); show(sinkMarker, true); }
@@ -2520,7 +2527,7 @@ function farmHint() {
   if (id === "tractor") {
     if (hooked(tractor)) return `Hooked! Hold ${K("Q")} to reel it in, or drive slowly away. Leave it on the <b class="g">green ring</b>, then ${K("E")} to unhook.`;
     if (target && target.ref === (tractor && tractor.index) && target.kind === 1) return `Press ${K("E")} to hook your winch to the tractor.`;
-    return `Dot's tractor is stuck in the mud up the lane. Don't drive into the mud: stop on firm ground, turn your <b>back</b> to the tractor (the winch is at the rear) and hook it with ${K("E")}.`;
+    return `Dinston's tractor is stuck in the mud up the lane. Don't drive into the mud: stop on firm ground, turn your <b>back</b> to the tractor (the winch is at the rear) and hook it with ${K("E")}.`;
   }
   if (id === "gate") return `A boulder is blocking the paddock gate (orange ring, west of the sinkhole). Lower the bucket ${K("&darr;")} a little and drive into it to push it out of the ring.`;
   if (id === "sink") return me.load > 0.5
@@ -2762,7 +2769,7 @@ function ridgeStep() {
   if (!job.moved && Math.hypot(t.x - R.spawn.x, t.z - R.spawn.z) > 8) job.moved = true;
   if (!job.ended) job.time += DT;
 }
-// the ending: the sky turns to sunset and the Hollises wave from the porch (scripted, nothing reacts)
+// the ending: the sky turns to sunset and the Hollises (Jinston and Winston) wave from the porch (scripted, nothing reacts)
 const sunsetSky = new THREE.Color(0xf2a65a), sunsetSun = new THREE.Color(0xffb36b);
 let porch = null;
 function ridgeSunset() {
@@ -2927,8 +2934,8 @@ function leveeCrest() {
   const top = (x) => { let c = -9; for (let z = F.levee.z - 4; z <= F.levee.z + 4; z += 0.5) c = Math.max(c, heightAt(x, z)); return c; };
   for (let x = F.berm.x + 1; x <= 86; x += 0.5) {               // the town's stretch of levee
     let c = top(x);
-    const dg = Math.abs(x - F.gate.x);
-    if (dg < F.gate.w / 2 + 0.95) c = dg > F.gate.w / 2 ? 3.2 : lerp(c, 2.8, shut);          // concrete walls, and the gate as it winds down
+    const dg = F.gate ? Math.abs(x - F.gate.x) : 1e9;
+    if (F.gate && dg < F.gate.w / 2 + 0.95) c = dg > F.gate.w / 2 ? 3.2 : lerp(c, 2.8, shut);          // concrete walls, and the gate as it winds down
     list.forEach((b, n) => { if (Math.abs(x - b.x) <= b.w / 2 + 1) per[n] = Math.min(per[n], c); });
     if (c < min) { min = c; at = x; }
   }
@@ -2972,12 +2979,11 @@ function floodStep() {
     }
   }
   // the floodgate wheel: reeling in while hooked to it winds the gate down (the rope pays out as the wheel turns)
-  if (winch.on && winch.kind === 2 && winch.ref === wheelAnchor && input.reel > 0 && job.gateClose < 1 && winch.T > C.wheelPull) {
+  if (gatePanel && winch.on && winch.kind === 2 && winch.ref === wheelAnchor && input.reel > 0 && job.gateClose < 1 && winch.T > C.wheelPull) {
     job.gateClose = Math.min(1, job.gateClose + DT / C.gateTime); winch.len = Math.min(WINCH.max, winch.len + WINCH.reelIn * DT * 0.95);
     wheelMesh.rotation.z -= DT * 3;
   }
-  gatePanel.position.set(F.gate.x, heightAt(F.gate.x, F.levee.z) + 1.5 + (1 - job.gateClose) * 3.4, F.levee.z);
-  if (job.gateClose >= 1) lockGate();
+  if (gatePanel) { gatePanel.position.set(F.gate.x, heightAt(F.gate.x, F.levee.z) + 1.5 + (1 - job.gateClose) * 3.4, F.levee.z); if (job.gateClose >= 1) lockGate(); }
   // the cars float down the river; winch them out before they go over the weir
   cars.forEach((c, k) => {
     if (!c.spawned && frac >= c.spec.at) {
@@ -2985,6 +2991,8 @@ function floodStep() {
       if (host) { c.body.setTranslation({ x: F.carStart.x, y: Math.max(job.water, heightAt(F.carStart.x, F.carStart.z)) + 0.6, z: F.carStart.z }, true); c.body.setLinvel({ x: 0.6, y: 0, z: 0 }, true); }
       showBanner(`<b>A car is floating down the river!</b>${c.spec.name}: winch it out before the weir.`, 4500); sfx.splash();
     }
+    const cp0 = c.body.translation();
+    c.beam.visible = c.active && !job.marks.has("car" + k) && !job.marks.has("lost" + k); c.beam.position.set(cp0.x, cp0.y + 30, cp0.z);
     if (job.marks.has("car" + k)) { if (c.body.isDynamic()) c.body.setBodyType(RAPIER.RigidBodyType.Fixed, true); return; }
     if (job.marks.has("lost" + k)) { if (c.active) { c.active = false; c.body.setEnabled(false); c.mesh.visible = false; if (winch.on && winch.kind === 1 && winch.ref === c.index) hookOff(); } return; }
     if (!c.active || !mineP(c)) return;
@@ -3033,12 +3041,12 @@ function checkFlood() {
   const n = net.online ? Math.max(1, net.roster.length) : 1, rate = (W2.peak - W2.start) / (W2.riseSolo / (1 + 0.3 * (n - 1)));
   const left = job.time < W2.grace ? W2.grace - job.time + (W2.peak - job.water) / rate : (W2.peak - job.water) / rate;
   const margin = cr.min - job.water;
-  const where = Math.abs(cr.at - F.gate.x) < 3 ? "the floodgate" : ([...F.breaches, F.late].find((b) => Math.abs(cr.at - b.x) < b.w / 2 + 2) || { name: `x ${cr.at.toFixed(0)}` }).name;
+  const where = F.gate && Math.abs(cr.at - F.gate.x) < 3 ? "the floodgate" : ([...F.breaches, F.late].find((b) => Math.abs(cr.at - b.x) < b.w / 2 + 2) || { name: `x ${cr.at.toFixed(0)}` }).name;
   // the levee strip: 16 stretches, green / yellow / red by how far above the river they are
   let strip = "";
   for (let k = 0; k < 16; k++) {
     const x0 = F.berm.x + 1 + (k * (86 - F.berm.x - 1)) / 16, x1 = x0 + (86 - F.berm.x - 1) / 16;
-    let lo = 1e9; for (let x = x0; x < x1; x += 1) { let c = -9; for (let z = F.levee.z - 4; z <= F.levee.z + 4; z += 1) c = Math.max(c, heightAt(x, z)); if (Math.abs(x - F.gate.x) < F.gate.w / 2 + 0.5) c = lerp(c, 2.8, job.gateClose); lo = Math.min(lo, c); }
+    let lo = 1e9; for (let x = x0; x < x1; x += 1) { let c = -9; for (let z = F.levee.z - 4; z <= F.levee.z + 4; z += 1) c = Math.max(c, heightAt(x, z)); if (F.gate && Math.abs(x - F.gate.x) < F.gate.w / 2 + 0.5) c = lerp(c, 2.8, job.gateClose); lo = Math.min(lo, c); }
     const m = lo - job.water;
     strip += `<i style="background:${m > 0.6 ? "#4fd16a" : m > 0.2 ? "#f2c23a" : "#e0453a"}"></i>`;
   }
@@ -3054,10 +3062,10 @@ function checkFlood() {
   const floating = cars.some((c, k) => c.active && !job.marks.has("car" + k) && !job.marks.has("lost" + k));
   let tried = false; try { tried = localStorage.getItem("jobsite-flood-tried") === "1"; } catch {}
   if (job.party != null) h = "";
-  else if (!job.moved) h = `The storm is back and the river is rising behind the levee: about ${Math.round(left / 60)} minutes to the peak. Close the floodgate and plug the breaks (orange beams) above the peak. Lowest first!`;
+  else if (!job.moved) h = `The storm is back and the river is rising behind the levee: about ${Math.round(left / 60)} minutes to the peak. Wind the floodgate shut and plug the breaks (orange beams) above the peak, lowest first! Cars may float past: blue beams.`;
   else if (margin < 0.35) h = `The river is ${margin.toFixed(2)} m from coming over at <b>${where}</b> (red beam). Get dirt there now!`;
-  else if (floating && rescued < cars.length) h = `A car is floating down the river! Stand on the levee, hook it with ${K("E")} and reel it onto dry land before the weir at the east end.`;
-  else if (job.gateClose < 1) h = winch.on && winch.kind === 2 && winch.ref === wheelAnchor
+  else if (floating && rescued < cars.length) h = `A car is floating down the river (blue beam)! Stand on the levee, hook it with ${K("E")} and reel it onto dry land before the weir at the east end.`;
+  else if (F.gate && job.gateClose < 1) h = winch.on && winch.kind === 2 && winch.ref === wheelAnchor
     ? `Hold ${K("Space")} to brake and ${K("Q")} to reel: the wheel winds the gate down. ${Math.round(job.gateClose * 100)}% closed.`
     : `Close the floodgate: back up to the red <b>wheel</b> beside it, hook it with ${K("E")}, brake and reel in with ${K("Q")}.`;
   else if (!obj.has("breaks")) h = `Fill the breaks with dirt from the borrow pits, above ${need.toFixed(1)} m all the way across. Moving water eats loose dirt: pack your plugs, or put boulders on the river side.${tried && job.time > 90 ? ` <b>Idea:</b> dig a spillway through the levee into the empty pasture (west, past its bank). The river rises slower while it fills.` : ""}`;

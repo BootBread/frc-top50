@@ -72,8 +72,12 @@ export function drawFace(cv, c) {
   g.beginPath(); g.arc(64, 64, 64, 0, Math.PI * 2); g.clip();
   g.fillStyle = f.bg || "#33404d"; g.fillRect(0, 0, 128, 128);
   const ell = (x, y, rx, ry, col, a0 = 0, a1 = Math.PI * 2) => { g.fillStyle = col; g.beginPath(); g.ellipse(x, y, rx, ry, 0, a0, a1); g.fill(); };
+  if (f.veil) { g.fillStyle = "rgba(255,255,255,.85)"; g.beginPath(); g.moveTo(40, 34); g.quadraticCurveTo(14, 90, 22, 128); g.lineTo(106, 128); g.quadraticCurveTo(114, 90, 88, 34); g.fill(); }
   ell(64, 138, 50, 38, f.shirt || "#5b7fa6");                                  // shoulders
+  if (f.shawl) { g.fillStyle = f.shawl; g.beginPath(); g.moveTo(14, 128); g.lineTo(64, 100); g.lineTo(114, 128); g.fill(); }
+  if (f.vest) { g.fillStyle = f.vest; g.fillRect(20, 112, 18, 20); g.fillRect(90, 112, 18, 20); g.fillStyle = "#e8f0f2"; g.fillRect(20, 118, 18, 3); g.fillRect(90, 118, 18, 3); }
   g.fillStyle = f.skin; g.fillRect(55, 86, 18, 18);                            // neck
+  if (f.bowtie) { g.fillStyle = f.bowtie; g.beginPath(); g.moveTo(64, 106); g.lineTo(52, 100); g.lineTo(52, 112); g.closePath(); g.moveTo(64, 106); g.lineTo(76, 100); g.lineTo(76, 112); g.closePath(); g.fill(); }
   if (f.hair === "long") ell(64, 74, 38, 42, f.hairColor);
   if (f.hair === "bun") ell(64, 24, 15, 13, f.hairColor);
   ell(36, 66, 6, 8, f.skin); ell(92, 66, 6, 8, f.skin);                       // ears
@@ -99,6 +103,7 @@ export function drawFace(cv, c) {
   if (f.mouth === "flat") { g.moveTo(56, 82); g.lineTo(72, 82); } else g.arc(64, 74, 10, 0.2 * Math.PI, 0.8 * Math.PI);
   g.stroke();
   ell(46, 72, 5, 3, "rgba(230,110,110,.35)"); ell(82, 72, 5, 3, "rgba(230,110,110,.35)");   // cheeks
+  if (f.flower) { ell(84, 36, 6, 6, f.flower); ell(84, 36, 2.5, 2.5, "#ffe066"); }
   // hats
   const hc = f.hatColor || "#c94a3a";
   if (f.hat === "cap") { ell(64, 40, 31, 20, hc, Math.PI, Math.PI * 2); g.fillStyle = hc; g.fillRect(33, 38, 62, 5); ell(82, 42, 22, 5, hc); }

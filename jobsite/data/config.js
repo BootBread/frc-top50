@@ -4,7 +4,7 @@
 export const DEFAULT_STARS = ["Finish the job", "Do one bonus job", "Do both bonus jobs"];
 export const LEVELS = {
   farm: {
-    stars: ["Help Grandma Dot", "Finish in under 10:00", "Never get stuck in the mud"],
+    stars: ["Help Grandma Dinston", "Finish in under 10:00", "Never get stuck in the mud"],
     targetTime: 600,               // seconds, for the second star
   },
   flood: {
@@ -15,7 +15,7 @@ export const LEVELS = {
     spillSlow: 0.4,                // while the spillway runs, the river rises this much as fast
     current: 0.7,                  // m/s the river carries a floating car
     wheelPull: 8000,               // rope tension (N) needed to turn the floodgate wheel
-    gateTime: 20,                  // seconds of reeling to wind the gate shut
+    gateTime: 45,                  // seconds of reeling to wind the gate shut
   },
   haul: {
     stars: ["Open the campground", "Open it with fewer than 5 campers waiting", "Make every tent pad perfectly flat"],
