@@ -1304,6 +1304,37 @@ const keys = new Set();
 const CAM_PITCH = 0.62, CAM_DIST = 19;
 const cam = { yaw: 0, offset: 0, pitch: CAM_PITCH, dist: CAM_DIST, drag: false };
 let hintsOn = true;
+// ---------- controller ----------
+// Standard (Xbox-style) layout. Left stick steers, triggers drive, bumpers move the arms,
+// X / B curl and dump, A brakes, Y hooks the winch, D-pad up / down reels, right stick looks around.
+const pad = { on: false, prev: [], rx: 0, ry: 0 };
+const PAD_LABEL = { KeyW: "RT", KeyS: "LT", KeyA: "Left stick", KeyD: "", Space: "A", ArrowUp: "RB", ArrowDown: "LB", ArrowLeft: "X", ArrowRight: "B",
+  KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyR: "View", KeyC: "R3", KeyH: "Menu" };
+function readPad() {
+  const list = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gp = null;
+  for (const g of list) if (g && g.connected && g.buttons.length >= 16) { gp = g; break; }
+  if (!gp) { if (pad.on) { pad.on = false; refreshHelp(); } pad.rx = pad.ry = 0; return null; }
+  const dz = (v) => (Math.abs(v) < 0.16 ? 0 : (v - Math.sign(v) * 0.16) / 0.84), b = (i) => (gp.buttons[i] ? gp.buttons[i].value : 0);
+  const st = { lx: dz(gp.axes[0] || 0), rx: dz(gp.axes[2] || 0), ry: dz(gp.axes[3] || 0), b };
+  const used = Math.abs(st.lx) + Math.abs(st.rx) + Math.abs(st.ry) > 0 || gp.buttons.some((x) => x.pressed);
+  if (used && !pad.on) { pad.on = true; refreshHelp(); }
+  // buttons that act once per press
+  const hit = (i) => b(i) > 0.5 && !(pad.prev[i] > 0.5);
+  if (pad.on) {
+    if (elStart.style.display !== "none") { if (hit(0)) begin(); }
+    else {
+      if (hit(3)) toggleWinch();
+      if (hit(15)) switchVehicle();
+      if (hit(8)) resetLoader();
+      if (hit(11) || hit(14)) { cam.offset = 0; cam.pitch = CAM_PITCH; cam.dist = CAM_DIST; }
+      if (hit(9)) toggleHints();
+    }
+  }
+  pad.prev = gp.buttons.map((x) => x.value);
+  pad.rx = st.rx; pad.ry = st.ry;
+  return st;
+}
 function readKeys() {
   const k = (c) => (keys.has(c) ? 1 : 0);
   input.fwd = k("KeyW") - k("KeyS");
@@ -1312,7 +1343,18 @@ function readKeys() {
   input.arm = k("ArrowUp") - k("ArrowDown");
   input.tilt = k("ArrowLeft") - k("ArrowRight");
   input.reel = k("KeyQ") - k("KeyX");
+  const g = padState;
+  if (g && pad.on) {
+    input.fwd = clamp(input.fwd + g.b(7) - g.b(6), -1, 1);
+    input.turn = clamp(input.turn - g.lx, -1, 1);
+    input.brake = input.brake || g.b(0) > 0.5 ? 1 : 0;
+    input.arm = clamp(input.arm + g.b(5) - g.b(4), -1, 1);
+    input.tilt = clamp(input.tilt + g.b(2) - g.b(1), -1, 1);
+    input.reel = clamp(input.reel + g.b(12) - g.b(13), -1, 1);
+  }
 }
+let padState = null;
+function toggleHints() { hintsOn = !hintsOn; elHint.style.display = hintsOn && elHint.innerHTML ? "block" : "none"; }
 addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT") return;
   if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
@@ -1322,7 +1364,8 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyC") { cam.offset = 0; cam.pitch = CAM_PITCH; cam.dist = CAM_DIST; }
   if (e.code === "KeyE" && running) toggleWinch();
   if (e.code === "KeyF" && running) switchVehicle();
-  if (e.code === "KeyH") { hintsOn = !hintsOn; elHint.style.display = hintsOn && elHint.innerHTML ? "block" : "none"; }
+  if (e.code === "KeyH") toggleHints();
+  if (pad.on) { pad.on = false; refreshHelp(); }          // back on the keyboard: show keyboard keys again
 });
 addEventListener("keyup", (e) => keys.delete(e.code));
 addEventListener("blur", () => keys.clear());
@@ -1344,7 +1387,19 @@ let bannerTimer = 0;
 function showBanner(html, ms) { elBanner.innerHTML = html; elBanner.style.display = "block"; clearTimeout(bannerTimer); bannerTimer = setTimeout(() => { elBanner.style.display = "none"; }, ms); }
 elTasks.addEventListener("click", (e) => { if (e.target.id === "leave") goSite("hub"); });
 const row = (ok, text, cls = "") => `<div class="${cls} ${ok ? "done" : ""}">${ok ? "&#10003;" : "&#9675;"} ${text}</div>`;
-const K = (k) => `<kbd>${k}</kbd>`;
+const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", R: "KeyR", H: "KeyH", C: "KeyC", Space: "Space",
+  "&uarr;": "ArrowUp", "&darr;": "ArrowDown", "&larr;": "ArrowLeft", "&rarr;": "ArrowRight" };
+const K = (k) => { const t = pad.on && KEY_CODE[k] ? PAD_LABEL[KEY_CODE[k]] : k; return t ? `<kbd>${t}</kbd>` : ""; };
+const elHelp = document.getElementById("help"), HELP_KEYS = elHelp.innerHTML;
+function refreshHelp() {
+  elHelp.innerHTML = !pad.on ? HELP_KEYS : `<b>Controller</b><br>
+    <kbd>Left stick</kbd> steer &nbsp; <kbd>RT</kbd> drive &nbsp; <kbd>LT</kbd> reverse &nbsp; <kbd>A</kbd> brake<br>
+    <kbd>RB</kbd><kbd>LB</kbd> raise / lower arms &nbsp; <kbd>X</kbd><kbd>B</kbd> curl / dump<br>
+    <kbd>Y</kbd> winch hook / unhook &nbsp; <kbd>D-pad &uarr;</kbd><kbd>&darr;</kbd> reel in / out<br>
+    <kbd>D-pad &rarr;</kbd> switch vehicle &nbsp; <kbd>View</kbd> reset &nbsp; <kbd>Menu</kbd> hints<br>
+    <kbd>Right stick</kbd> look &nbsp; <kbd>R3</kbd> recenter camera`;
+  elHint.dataset.h = ""; elPrompt.dataset.h = "\u0000";       // redraw hint and prompt with the right labels
+}
 function setHint(html) {
   if (elHint.dataset.h === html) return;
   elHint.dataset.h = html; elHint.innerHTML = html ? `<span>&#128161;</span> ${html}` : "";
@@ -1668,9 +1723,11 @@ function syncVisuals(dt, now = performance.now()) {
 }
 
 let running = false, last = 0, acc = 0, hudAt = 0, padNow = null;
-function frame(now) {
-  requestAnimationFrame(frame);
+function frame(now) { requestAnimationFrame(frame); tick(now); }
+function tick(now) {
   const dt = Math.min(0.1, (now - last) / 1000 || 0); last = now;
+  padState = readPad();
+  if (pad.rx || pad.ry) { cam.offset -= pad.rx * 2.4 * dt; cam.pitch = clamp(cam.pitch + pad.ry * 1.3 * dt, 0.08, 1.25); }
   if (running) {
     readKeys();
     acc += dt;
@@ -1726,7 +1783,7 @@ else if (params.get("solo")) begin();
 
 // hooks for automated checks
 window.__game = { SITE, world, chassis, vehicle, props, anchors, boulders, logs, stump: () => stump, tractor: () => tractor, input, me, job, L, WINCH, FARM, HUB, net, winch, heights, heightAt, mudAt, slopeAt,
-  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
+  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
   get flags() { return flags; }, FL, parts, get target() { return target; }, get grip() { return gripNow; },
   run(steps, set = {}) { Object.assign(input, set); for (let i = 0; i < steps; i++) physicsStep(); syncVisuals(DT); target = !winch.on ? findTarget() : null; siteCheck(); },
   render() { renderer.render(scene, camera); } };
