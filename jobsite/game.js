@@ -401,7 +401,7 @@ const FIRE = {
   spawn: { x: 0, z: -66, yaw: 0 },
   farm: { x0: -42, x1: 42, z0: -84, z1: -34 },
   line: { z: -16 },                                     // the suggested firebreak
-  ignite: { z: 72, at: 150 },                           // where the fire starts, and when (seconds)
+  ignite: { z: 72, at: 0 },                             // where the fire starts, and when (seconds): straight away
   windShift: 200,                                       // seconds after it starts, the wind swings south-east
   trees: [[-50, 6], [-28, 18], [-6, 28], [18, 10], [40, 22], [58, 4], [-60, 34], [30, 44], [-36, -4], [8, -4]],
   cows: [[-20, -60], [-12, -54], [14, -62], [22, -56], [-28, -70], [6, -72]],
