@@ -7,9 +7,10 @@ import RAPIER from "rapier";
 await RAPIER.init();
 
 const params = new URLSearchParams(location.search);
-const SITE = ["farm", "river", "ridge"].includes(params.get("site")) ? params.get("site") : "hub";
-const SEED = { hub: 20261116, farm: 20261117, river: 20261118, ridge: 20261119 }[SITE];
-const TITLES = { farm: "Muddle Acres", river: "Rapid River", ridge: "Ridge Road" };
+const SITE = ["farm", "river", "ridge", "haul", "flood"].includes(params.get("site")) ? params.get("site") : "hub";
+const SEED = { hub: 20261116, farm: 20261117, river: 20261118, ridge: 20261119, haul: 20261120, flood: 20261121 }[SITE];
+const TITLES = { farm: "Muddle Acres", river: "Rapid River", ridge: "Ridge Road", haul: "Gravel Run", flood: "Flood Season" };
+const LEVEL_NUM = { farm: 1, river: 2, ridge: 3, haul: 4, flood: 5 };
 const DT = 1 / 60;
 const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
 const SERVER = LOCAL ? "ws://localhost:8788" : "wss://jobsite-rooms.frctop50.workers.dev";
@@ -48,6 +49,8 @@ const HUB = {
     { id: "farm", title: "1 · Muddle Acres", x: -36, z: -44 },
     { id: "river", title: "2 · Rapid River", x: -12, z: -44, needs: "farm" },
     { id: "ridge", title: "3 · Ridge Road", x: 12, z: -44, needs: "river" },
+    { id: "haul", title: "4 · Gravel Run", x: -62, z: -44, needs: "ridge" },
+    { id: "flood", title: "5 · Flood Season", x: -62, z: -18, needs: "haul" },
     { id: "garage", title: "Garage", x: 46, z: -46, garage: true },
   ],
   mound: { x: 20, z: -12, r: 7, h: 3.2 },
@@ -105,8 +108,8 @@ function riverDesign(x, z) {
 const RIDGE = {
   spawn: { x: 0, z: -76, yaw: 0 },
   cabin: { x: 11, z: -62 }, wood: { x: -12, z: -64 },
-  slide: { z: -15, len: 5.5, h: 2.3 },
-  gully: { z0: 4, z1: 10, depth: 1.9 },
+  slide: { z: -15, len: 5, h: 3.6 },
+  gully: { z0: 4, z1: 9, depth: 2.7 },
   stage: { z0: 38, z1: 46 }, pitch: { z0: 46, z1: 59 }, top: 22,
   post: { x: 4.5, z: 64 }, pad: { x: 0, z: 78, r: 7 },
   rocks: [[-2, -17, 1.1], [2.5, -13.5, 1.0], [0.5, -19, 1.15], [-3, -12, 1.0]],
@@ -132,12 +135,84 @@ function ridgeDesign(x, z) {
   flat(R.spawn.x, R.spawn.z, 14, 0.3); flat(R.cabin.x, R.cabin.z, 7, 0.3); flat(R.wood.x, R.wood.z, 5, 0.3);
   valley = lerp(valley, 0.3, smooth(9, 4, ax) * smooth(-84, -76, z));                             // the road in
   const summit = smooth(R.pitch.z1 - 1, R.pitch.z1 + 4, z);
-  const hill = ridgeRoad(z) + 7 * smooth(4.5, 11, ax) * (1 - summit) + (noise(x / 9, z / 9) - 0.5) * 1.2 * smooth(8, 14, ax);
+  const hill = ridgeRoad(z) + 11 * smooth(5, 8.5, ax) * (1 - summit) + (noise(x / 9, z / 9) - 0.5) * 1.2 * smooth(8, 14, ax);
   let h = lerp(valley, hill, smooth(-38, -30, z));
   h += smooth(78, 94, Math.max(ax, Math.abs(z))) * 12;
   const G2 = R.gully;                                                                              // the washed-out gap
   h -= G2.depth * smooth(G2.z0 - 1.5, G2.z0 + 1, z) * smooth(G2.z1 + 1.5, G2.z1 - 1, z) * smooth(10, 7, ax);
   const S = R.slide, loose = S.h * Math.max(0, 1 - Math.abs(z - S.z) / S.len) * smooth(8.5, 6, ax);
+  const wall = smooth(-31, -27, z) * smooth(R.pitch.z1 - 1, R.pitch.z1 - 4, z) * smooth(4.7, 5.2, ax);
+  return { h: h + loose, loose, mud: 0, rock: wall > 0.5 ? 1 : 0 };      // the cutting walls are bedrock: no digging through them
+}
+
+// ----- level 4: Gravel Run. A campsite in the valley needs a gravel pad; the gravel is in a pit on a
+// plateau, up a switchback road cut into a steep hillside, beyond a boggy stream.
+const HAUL = {
+  spawn: { x: -22, z: -76, yaw: 0 },
+  pad: { x: 22, z: -58, w: 28, d: 18 },
+  stream: { z: -28, w: 3.5 },
+  road: [[8, -60, 0.3], [-40, -60, 0.3], [-40, 10, 0.3], [46, 15, 2.0], [46, 22, 3.4], [-34, 27, 7.6], [-34, 40, 9], [-34, 52, 9]],
+  hillZ0: 14, hillZ1: 30, top: 9,
+  pit: { x: -34, z: 66, r: 13, h: 4 },
+  hopper: { x: -12, z: 58 }, bay: { x: -12, z: 46, r: 3.2 },
+  block: { log: [-34, 41, 9, 0.42, 1.45], rocks: [[-30.5, 45, 1.0], [-37.5, 47, 1.05]] },
+  fordRocks: [[-48, -38, 1.0], [-30, -40, 0.95], [-44, -45, 1.05], [-34, -36, 0.9], [-52, -42, 1.0]],
+  picnic: { x: -24, z: 70 },
+  hairpin: { x0: 41, x1: 51, z0: 12, z1: 25 },
+  trees: [[-60, -50], [50, -72], [62, -30], [-64, 0], [66, 4], [-62, 72], [12, 76], [44, 62], [-6, -42], [56, -46], [20, -20], [-20, -12]],
+  yards: [{ x: -40, z: -76, r: 5.5 }, { x: -2, z: 70, r: 5.5 }],
+};
+function roadInfo(pts, x, z) {
+  let best = 1e9, hh = 0;
+  for (let k = 0; k + 1 < pts.length; k++) {
+    const [ax, az, ah] = pts[k], [bx, bz, bh] = pts[k + 1], dx = bx - ax, dz = bz - az;
+    const t = clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1), d = Math.hypot(x - ax - dx * t, z - az - dz * t);
+    if (d < best) { best = d; hh = lerp(ah, bh, t); }
+  }
+  return { d: best, h: hh };
+}
+function haulDesign(x, z) {
+  const H = HAUL;
+  let h = (noise(x / 40, z / 40) - 0.5) * 2.4 + (noise(x / 12 + 3, z / 12) - 0.5) * 0.8 + 0.4;
+  h += H.top * smooth(H.hillZ0, H.hillZ1, z);                                                    // the steep hillside
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  const P = H.pad, out = Math.max(Math.abs(x - P.x) - P.w / 2, Math.abs(z - P.z) - P.d / 2);
+  h = lerp(h, 0.3, smooth(7, 0, out));
+  const r = roadInfo(H.road, x, z);
+  h = lerp(h, r.h, smooth(5.6, 3.2, r.d));
+  const S = H.stream, ds = Math.abs(z - S.z);
+  h = lerp(h, 0.1, smooth(S.w + 7, S.w + 2, ds));
+  const Pt = H.pit, loose = Pt.h * Math.max(0, 1 - (Math.hypot(x - Pt.x, z - Pt.z) / Pt.r) ** 1.6);
+  return { h: h + loose, loose, mud: 1.9 * smooth(S.w + 1.5, S.w - 0.5, ds), grav: loose };
+}
+
+// ----- level 5: Flood Season. A river rises behind an old levee with three breaches and an open floodgate.
+const FLOOD = {
+  spawn: { x: 0, z: -62, yaw: 0 },
+  levee: { z: 22, crest: 2.6 },
+  breaches: [{ x: -50, w: 3, floor: 1.3, name: "west breach" }, { x: -8, w: 4, floor: 0.8, name: "middle breach" }, { x: 40, w: 3, floor: 1.4, name: "east breach" }],
+  gate: { x: 20, w: 4 }, gateProp: { x: 28, z: 4 },
+  borrow: [{ x: -30, z: -4, r: 11, h: 4.2 }, { x: 56, z: -6, r: 10, h: 4.2 }],
+  cars: [[-30, 29, 0x3b8fe0], [10, 30.5, 0xd8333a]],
+  safeZ: 12,
+  homes: [[-40, -30, 1], [-14, -38, 1], [14, -30, 1], [42, -38, 1], [-62, -52, 1], [62, -50, 1]],
+  water: { start: -1.2, peak: 2.0, riseSolo: 1440, hold: 40, grace: 45 },
+  trees: [[-70, -20], [70, -20], [-26, -50], [30, -58], [0, -30], [-72, 8], [74, 8]],
+  yards: [{ x: 24, z: -64, r: 5.5 }, { x: 4, z: -8, r: 5.5 }],
+};
+function floodDesign(x, z) {
+  const F = FLOOD, L2 = F.levee;
+  let h = (noise(x / 36, z / 36) - 0.5) * 1.2 + (noise(x / 10 + 3, z / 10) - 0.5) * 0.4 + 0.3;
+  h = lerp(h, 0.0, smooth(18, 26, z));                                                           // floodplain
+  h -= 2.6 * smooth(30, 38, z);                                                                   // river channel
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  const dzl = Math.abs(z - L2.z), shape = smooth(4.3, 0.75, dzl);
+  let crest = L2.crest;
+  for (const b of F.breaches) crest = lerp(crest, Math.min(crest, b.floor), smooth(b.w / 2 + 1.6, b.w / 2, Math.abs(x - b.x)));
+  if (Math.abs(x - F.gate.x) < F.gate.w / 2 + 0.9) crest = 0;                                      // the floodgate slot
+  h += crest * shape;
+  let loose = 0;
+  for (const B of F.borrow) loose += B.h * Math.max(0, 1 - (Math.hypot(x - B.x, z - B.z) / B.r) ** 1.6);
   return { h: h + loose, loose, mud: 0 };
 }
 
@@ -177,15 +252,15 @@ function farmDesign(x, z, noSink = false) {
 // ---------- terrain grid ----------
 const G = 384, CELL = 0.5, SIZE = G * CELL, HALF = SIZE / 2, CH = 32, NC = G / CH, W = G + 1;
 const BEDROCK = 5;                            // how far below the original ground you can dig
-const design = { hub: hubDesign, farm: farmDesign, river: riverDesign, ridge: ridgeDesign }[SITE];
+const design = { hub: hubDesign, farm: farmDesign, river: riverDesign, ridge: ridgeDesign, haul: haulDesign, flood: floodDesign }[SITE];
 // heights[zi + xi * W]: rows along z, columns along x, the layout Rapier's heightfield wants.
 // firm[i] is the top of undisturbed ground: anything above it is loose dirt.
 const heights = new Float32Array(W * W), base = new Float32Array(W * W), firm = new Float32Array(W * W),
-  loose = new Uint8Array(W * W), mudA = new Float32Array(W * W), gravH = new Float32Array(W * W);   // gravH: thickness of gravel lying on top
+  loose = new Uint8Array(W * W), mudA = new Float32Array(W * W), gravH = new Float32Array(W * W), rockA = new Uint8Array(W * W);   // gravH: thickness of gravel lying on top
 const sinkIdx = [], sinkTarget = [];
 for (let xi = 0; xi <= G; xi++) for (let zi = 0; zi <= G; zi++) {
   const x = xi * CELL - HALF, z = zi * CELL - HALF, i = zi + xi * W, d = design(x, z);
-  heights[i] = base[i] = d.h; firm[i] = d.h - d.loose; loose[i] = d.loose > 0.02 ? 1 : 0; mudA[i] = d.mud;
+  heights[i] = base[i] = d.h; firm[i] = d.h - d.loose; loose[i] = d.loose > 0.02 ? 1 : 0; mudA[i] = d.mud; rockA[i] = d.rock ? 1 : 0; if (d.grav) gravH[i] = d.grav;
   if (SITE === "farm" && Math.hypot(x - FARM.sink.x, z - FARM.sink.z) < FARM.sink.r) { sinkIdx.push(i); sinkTarget.push(farmDesign(x, z, true).h - 0.1); }
 }
 function sample(arr, x, z) {
@@ -247,6 +322,19 @@ function groundColor(wx, wz, hm, steep) {
     _c.copy(cDirt).lerp(cSand, smooth(0.35, 0.75, noise(wx / 23 + 40, wz / 23)));
     _c.lerp(cGrass, smooth(1.6, 3.4, hm + (noise(wx / 9, wz / 9 + 7) - 0.5) * 2));
     _c.lerp(cRock, Math.max(smooth(0.75, 1.2, steep), smooth(8, 12, hm)));
+    return;
+  }
+  if (SITE === "haul") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    const P = HAUL.pad, out = Math.max(Math.abs(wx - P.x) - P.w / 2, Math.abs(wz - P.z) - P.d / 2);
+    _c.lerp(cDirt, Math.max(smooth(4.2, 3, roadInfo(HAUL.road, wx, wz).d), smooth(1, -0.5, out) * 0.8));
+    _c.lerp(cRock, smooth(0.8, 1.2, steep) * 0.8);
+    return;
+  }
+  if (SITE === "flood") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    _c.lerp(cSand, smooth(-0.3, -1.2, hm));
+    _c.lerp(cDirt, smooth(5.5, 3.8, Math.abs(wx)) * smooth(-80, -70, wz) * smooth(14, 8, wz));
     return;
   }
   if (SITE === "ridge") {
@@ -363,6 +451,7 @@ function relaxStep() {
   let moved = false;
   const pair = (xa, za, xb, zb) => {
     const ia = za + xa * W, ib = zb + xb * W, d = heights[ia] - heights[ib], hi = d > 0 ? ia : ib;
+    if (rockA[hi] && heights[hi] - firm[hi] <= 0.03) return;                                    // bedrock never slumps
     const over = Math.abs(d) - (heights[hi] - firm[hi] > 0.03 ? looseSlope(hi) : 1.5) * CELL;
     if (over <= 0.01) return;
     const took = -addHeight(d > 0 ? xa : xb, d > 0 ? za : zb, -over * 0.3), tookG = lastG;
@@ -650,7 +739,7 @@ if (SITE === "ridge") {
   for (const [x, z] of R.trees) addTree(x, z, 1.1 + rng() * 0.4);
   addPost(R.post.x, R.post.z);
   padMarker = marker(R.pad.x, R.pad.z, R.pad.r, 0x8be28b);
-  cabin = addCrate(R.cabin.x, R.cabin.z, 3.0, 2.3, 3.6, 0xb98a52, "cabin", 54);
+  cabin = addCrate(R.cabin.x, R.cabin.z, 3.0, 2.3, 3.6, 0xb98a52, "cabin", 140);
   {                                               // give the cabin a roof, a door and a window
     const roof = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 2.5, 1.3, 4, 1).rotateY(Math.PI / 4), lam(0x8f3b2e, true)); roof.scale.set(1, 1, 1.25); roof.position.y = 1.85; roof.castShadow = true; cabin.mesh.add(roof);
     const door = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.5, 0.06), lam(0x5a3b22)); door.position.set(-0.6, -0.35, 1.82); cabin.mesh.add(door);
@@ -678,6 +767,87 @@ function layGravel(idx, x, z, size) {
   for (let k = 0; k < 24; k++) spawnDirt(x + (Math.random() - 0.5) * 2, heightAt(x, z) + 0.8, z + (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 6, 3 + Math.random() * 3, (Math.random() - 0.5) * 6, 0, 1);
 }
 
+// ----- level 4: Gravel Run -----
+let hopper = null, padCells = [], pinCells = [], picnic = null, blockLog = null, padMarker4 = null, fordMarker4 = null, bayMarker = null;
+const hopperD = [0, 0], blockRocks = [], fordRocks = [];
+if (SITE === "haul") {
+  const H = HAUL;
+  backdropTrees(130, 82, 94);
+  for (const [x, z] of H.trees) addTree(x, z, 1.1 + rng() * 0.4);
+  const cellsIn = (x0, x1, z0, z1) => { const out = []; for (let x = x0; x <= x1; x += CELL) for (let z = z0; z <= z1; z += CELL) out.push(Math.round((z + HALF) / CELL) + Math.round((x + HALF) / CELL) * W); return out; };
+  const P = H.pad;
+  padCells = cellsIn(P.x - P.w / 2, P.x + P.w / 2, P.z - P.d / 2, P.z + P.d / 2);
+  pinCells = cellsIn(H.hairpin.x0, H.hairpin.x1, H.hairpin.z0, H.hairpin.z1);
+  const line = lam(0xffc928);
+  for (const [sx, sz, lx, lz] of [[P.w, 0.2, 0, -P.d / 2], [P.w, 0.2, 0, P.d / 2], [0.2, P.d, -P.w / 2, 0], [0.2, P.d, P.w / 2, 0]]) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.12, sz), line); m.position.set(P.x + lx, 0.4, P.z + lz); scene.add(m);
+  }
+  padMarker4 = marker(P.x, P.z, 1.2, 0xffc928);
+  fordMarker4 = marker(-40, H.stream.z, 6, 0xffa23a);
+  // the loading hopper: a bin you tip into, a conveyor, and a chute a truck parks under
+  const hp = H.hopper, y0 = heightAt(hp.x, hp.z), bay = H.bay, yb = heightAt(bay.x, bay.z), concrete = lam(0xa9adb3), yellow = lam(0xffc928);
+  const solid = (mat, sx, sy, sz, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; scene.add(m);
+    world.createCollider(RAPIER.ColliderDesc.cuboid(sx / 2, sy / 2, sz / 2).setTranslation(x, y, z)); return m; };
+  solid(concrete, 4.9, 1.3, 0.3, hp.x, y0 + 0.65, hp.z + 2.3); solid(concrete, 4.9, 1.3, 0.3, hp.x, y0 + 0.65, hp.z - 2.3);
+  solid(concrete, 0.3, 1.3, 4.9, hp.x + 2.3, y0 + 0.65, hp.z); solid(concrete, 0.3, 1.3, 4.9, hp.x - 2.3, y0 + 0.65, hp.z);
+  for (const e of [-1, 1]) solid(yellow, 0.35, 5.0, 0.35, bay.x + e * 2.3, yb + 2.5, bay.z);
+  const chute = new THREE.Mesh(new THREE.BoxGeometry(4.95, 0.9, 1.4), yellow); chute.position.set(bay.x, yb + 5.0, bay.z); chute.castShadow = true; scene.add(chute);
+  const from = new THREE.Vector3(hp.x, y0 + 1.0, hp.z - 2.4), to = new THREE.Vector3(bay.x, yb + 5.3, bay.z);
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.25, from.distanceTo(to)), lam(0x3a3f46)); belt.position.copy(from).lerp(to, 0.5); belt.lookAt(to); belt.castShadow = true; scene.add(belt);
+  const heap = new THREE.Mesh(new THREE.SphereGeometry(2.1, 12, 6), lam(0xa9a8a2, true)); heap.position.set(hp.x, y0, hp.z); heap.visible = false; scene.add(heap);
+  const sign = makeSign(4.2, 1.1); sign.position.set(hp.x, y0 + 2.2, hp.z - 2.5); sign.rotation.y = Math.PI; scene.add(sign); sign.userData.draw("Hopper", "Tip gravel in here");
+  hopper = { x: hp.x, z: hp.z, y0, vol: 0, g: 0, cap: 40, heap };
+  bayMarker = marker(bay.x, bay.z, bay.r, 0xffa23a);
+  // props: the pit road blockage, rocks by the stream, the picnic tables
+  { const [x, z, len, rad, yaw] = H.block.log; blockLog = addLog(x, z, len, rad, yaw); blockLog.name = "fallen tree"; }
+  for (const [x, z, r] of H.block.rocks) blockRocks.push(addRock(x, z, r, "rock"));
+  for (const [x, z, r] of H.fordRocks) fordRocks.push(addRock(x, z, r, "rock"));
+  picnic = addCrate(H.picnic.x, H.picnic.z, 2.0, 1.0, 1.4, 0x8a5a2b, "picnic tables", 200);
+}
+
+// ----- level 5: Flood Season -----
+let gate = null, gatePanel = null, riverWater = null, floodWater = null, lowBeam = null;
+const cars = [], breachBeams = [], tyreMat = lam(0x22262c);
+if (SITE === "flood") {
+  const F = FLOOD;
+  backdropTrees(130, 82, 94);
+  for (const [x, z] of F.trees) addTree(x, z, 1.1 + rng() * 0.4);
+  for (const [x, z, face] of F.homes) {
+    const b = building({ x, z, w: 7, d: 6, h: 3.6, door: 2.2, dh: 2.3, face, wall: [0xe9dcc3, 0xd7e3ea, 0xf0d2c0][Math.floor(rng() * 3)], roof: [0x8f3b2e, 0x3b5f8f, 0x4f6b3a][Math.floor(rng() * 3)] });
+    b.sign.visible = false;
+  }
+  const wmat = new THREE.MeshLambertMaterial({ color: 0x4f7f95, transparent: true, opacity: 0.85 });
+  riverWater = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, HALF - F.levee.z + 1), wmat);
+  riverWater.rotation.x = -Math.PI / 2; riverWater.position.set(0, F.water.start, (F.levee.z - 1 + HALF) / 2); scene.add(riverWater);
+  floodWater = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, HALF + F.levee.z), wmat);
+  floodWater.rotation.x = -Math.PI / 2; floodWater.position.set(0, -5, (F.levee.z - HALF) / 2); floodWater.visible = false; scene.add(floodWater);
+  // the floodgate slot: two concrete walls through the levee, and the gate panel once it is in
+  const concrete = lam(0xa9adb3), gx = F.gate.x, gz = F.levee.z;
+  for (const e of [-1, 1]) {
+    const x = gx + e * (F.gate.w / 2 + 0.45), m = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.4, 9), concrete); m.position.set(x, 1.3, gz); m.castShadow = m.receiveShadow = true; scene.add(m);
+    world.createCollider(RAPIER.ColliderDesc.cuboid(0.45, 1.7, 4.5).setTranslation(x, 1.3, gz));
+  }
+  gatePanel = new THREE.Mesh(new THREE.BoxGeometry(F.gate.w, 3.0, 0.5), lam(0x7d858f)); gatePanel.position.set(gx, heightAt(gx, gz) + 1.5, gz); gatePanel.visible = false; gatePanel.castShadow = true; scene.add(gatePanel);
+  gate = addCrate(F.gateProp.x, F.gateProp.z, 3.7, 1.6, 1.2, 0x7d858f, "floodgate", 900);
+  for (const b of F.breaches) { const mk = marker(b.x, F.levee.z, 0.5, 0xffa23a); mk.ring.visible = false; breachBeams.push(mk.beam); }
+  const gm = marker(gx, gz, 0.5, 0xffa23a); gm.ring.visible = false; breachBeams.push(gm.beam);
+  lowBeam = marker(0, F.levee.z, 0.5, 0xff4a3a).beam; lowBeam.visible = false;
+  for (const [x, z, color] of F.cars) {
+    const c = addCrate(x, z, 1.9, 1.0, 4.0, color, "car", 420);
+    c.mesh.children.slice(1).forEach((m) => (m.visible = false));                    // no crate straps on a car
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.7, 2.0), lam(0x9fd0e8)); cab.position.set(0, 0.85, -0.2); c.mesh.add(cab);
+    for (const [sx, sz] of [[1, 1.3], [-1, 1.3], [1, -1.3], [-1, -1.3]]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.3, 12).rotateZ(Math.PI / 2), tyreMat); w.position.set(sx * 0.95, -0.45, sz); c.mesh.add(w); }
+    cars.push(c);
+  }
+}
+function lockGate() {
+  if (!gate || !gate.active) return;
+  gate.active = false; gate.body.setEnabled(false); gate.mesh.visible = false; if (winch.on && winch.kind === 1 && winch.ref === gate.index) hookOff();
+  gatePanel.visible = true;
+  const F = FLOOD;
+  world.createCollider(RAPIER.ColliderDesc.cuboid(F.gate.w / 2, 1.5, 0.25).setTranslation(F.gate.x, gatePanel.position.y, F.levee.z));
+}
+
 function setActiveBoulders(n) {
   n = clamp(n, 5, boulders.length);
   for (let i = 0; i < boulders.length; i++) {
@@ -699,6 +869,7 @@ const L = {
 const KINDS = {
   loader: { name: "wheel loader", engine: 5200, maxSpeed: 9.5, reverseSpeed: 6, steer: 0.55 },
   roller: { name: "road roller", engine: 6200, maxSpeed: 5.5, reverseSpeed: 4.5, steer: 0.5 },
+  truck: { name: "dump truck", engine: 7400, maxSpeed: 12, reverseSpeed: 6, steer: 0.5, cap: 18 },
 };
 const WINCH = { max: 35, tmax: 60000, reelIn: 2.5, payOut: 3.5, min: 2.5 };
 const HOOK = new THREE.Vector3(0, 0.15, -2.85);       // the winch fairlead on the counterweight
@@ -709,7 +880,7 @@ function box(mat, sx, sy, sz, x, y, z, parent) {
   m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
   return m;
 }
-const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn, ridge: RIDGE.spawn }[SITE];
+const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn, ridge: RIDGE.spawn, haul: HAUL.spawn, flood: FLOOD.spawn }[SITE];
 const spawnAt = (slot) => {
   const off = -7.5 + slot * 5, c = Math.cos(site0.yaw), s = Math.sin(site0.yaw);
   return { x: site0.x + off * c, z: site0.z - off * s, yaw: site0.yaw };
@@ -778,12 +949,14 @@ const DECOR = {
     stripes: [[0.962, -1.625, 1.65], [1.948, -0.15, 1.45], [0.407, 0.9, 2.0]] },
   roller: { side: { x: 0.962, y: 0.5, z: -0.75, len: 2.55, h: 0.7 }, hood: { y: 0.857, z: -1.62, len: 0.8, w: 1.7 },
     stripes: [[0.862, -1.625, 0.85], [2.128, -0.55, 1.5], [0.862, 0.33, 0.45]] },
+  truck: { side: { x: 1.112, y: 0.62, z: 2.05, len: 1.45, h: 0.95 }, hood: { y: 1.567, z: 2.05, len: 1.5, w: 2.0 },
+    stripes: [[1.567, 2.05, 1.55]] },
 };
 function buildDecor(group) {
   const d = { stripeMat: lam(0xf2f2ee), single: [], twin: [], sides: [], hood: [],
     flameMat: new THREE.MeshLambertMaterial({ map: getFlameTex(0), transparent: true, alphaTest: 0.35, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }) };
   const add = (kind, mesh, list) => { mesh.visible = false; mesh.userData.kind = kind; group.add(mesh); list.push(mesh); };
-  for (const kind of ["loader", "roller"]) {
+  for (const kind of ["loader", "roller", "truck"]) {
     const D = DECOR[kind];
     for (const [y, z, len] of D.stripes) {
       const one = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.012, len), d.stripeMat); one.position.set(0, y, z); add(kind, one, d.single);
@@ -862,15 +1035,25 @@ function makeLoader(slot, local) {
     const mark = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, 0.12, 0.4), dark); mark.position.y = 0.81; d.add(mark);
     return d;
   });
+  // ... or a dump truck: cab at the front, a tipping bed behind
+  const truckVis = wheels.map((w) => w.steerNode);
+  const tb = (mat, sx, sy, sz, x, y, z) => { const m = box(mat, sx, sy, sz, x, y, z, group); m.visible = false; truckVis.push(m); return m; };
+  tb(dark, 1.7, 0.35, 5.6, 0, -0.2, -0.4); tb(paint, 2.2, 1.5, 1.5, 0, 0.7, 2.05); tb(glass, 2.0, 0.75, 0.1, 0, 1.0, 2.81);
+  tb(paint, 2.25, 0.12, 1.55, 0, 1.5, 2.05); tb(dark, 2.3, 0.3, 0.25, 0, -0.1, 2.9); tb(dark, 0.14, 1.1, 0.14, 1.0, 1.55, 1.25);
+  const bedPivot = new THREE.Group(); bedPivot.position.set(0, 0.2, -3.05); bedPivot.visible = false; group.add(bedPivot); truckVis.push(bedPivot);
+  box(steel, 2.5, 0.12, 4.4, 0, 0, 2.2, bedPivot); box(paint, 0.1, 1.1, 4.4, 1.25, 0.55, 2.2, bedPivot); box(paint, 0.1, 1.1, 4.4, -1.25, 0.55, 2.2, bedPivot);
+  box(paint, 2.5, 1.35, 0.12, 0, 0.67, 4.4, bedPivot);
+  const bedHeap = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 6), lam(0x8a6238, true)); bedHeap.position.set(0, 0.12, 2.2); bedHeap.visible = false; bedHeap.castShadow = true; bedPivot.add(bedHeap);
   const decor = buildDecor(group);
-  const ld = { slot, paint, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, loadG: 0, roll: 0,
-    kind: "loader", vis: { loader: loaderVis, roller: rollerVis }, drums, decor, look: { ...DEFAULT_LOOK } };
+  const ld = { slot, paint, bedPivot, bedHeap, bed: 0, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, loadG: 0, roll: 0,
+    kind: "loader", vis: { loader: loaderVis, roller: rollerVis, truck: truckVis }, drums, decor, look: { ...DEFAULT_LOOK } };
   return ld;
 }
 function setKind(ld, kind) {
   if (!KINDS[kind] || ld.kind === kind) return;
   ld.kind = kind;
-  for (const k in ld.vis) for (const m of ld.vis[k]) m.visible = k === kind;
+  for (const k in ld.vis) for (const m of ld.vis[k]) m.visible = false;      // wheels belong to two kinds, so hide all first
+  for (const m of ld.vis[kind]) m.visible = true;
   for (const c of ld.bucketColliders) c.setEnabled(kind === "loader");
   showDecor(ld);
 }
@@ -882,7 +1065,8 @@ try { myLook = cleanLook(JSON.parse(localStorage.getItem("jobsite-look") || "nul
 applyLook(me, myLook);
 const chassis = me.body;
 // Places to change vehicle: the garage in the quarry, and a vehicle yard near the start of each job.
-const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 } }[SITE] || null;
+const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 }, haul: HAUL.yards[0], flood: FLOOD.yards[0] }[SITE] || null;
+const YARDS = { haul: HAUL.yards, flood: FLOOD.yards }[SITE] || (YARD ? [YARD] : []);
 function parkDisplay(kind, slot, x, z, yaw) {
   const d = makeLoader(slot, false);
   setKind(d, kind);
@@ -896,9 +1080,13 @@ const displays = [];
 if (SITE === "hub") {
   const gh = HUB.houses.find((h) => h.garage);
   displays.push(parkDisplay("roller", 2, gh.x - 10.5, gh.z - 2.5, 0), parkDisplay("loader", 3, gh.x - 3.5, gh.z - 2.5, 0));
-} else if (YARD) {
-  marker(YARD.x, YARD.z, YARD.r, 0xb48cff);
-  displays.push(parkDisplay("roller", 2, YARD.x + 8.5, YARD.z + 1, -0.5));
+} else {
+  YARDS.forEach((y, n) => {
+    marker(y.x, y.z, y.r, 0xb48cff);
+    const big = SITE === "haul" || SITE === "flood";
+    displays.push(parkDisplay(big ? "truck" : "roller", 2, y.x + 8.5, y.z + 1, -0.5));
+    if (big && n === 0) displays.push(parkDisplay("roller", 3, y.x - 8.5, y.z + 1, 0.5));
+  });
 }
 const vehicle = world.createVehicleController(chassis);
 vehicle.indexUpAxis = 1;
@@ -934,6 +1122,12 @@ function poseBucket(ld) {
     _m.multiplyMatrices(ld.armPivot.matrix, ld.bucketPivot.matrix).multiply(ld.bucketParts[i].matrix).decompose(_p, _q, _s);
     ld.bucketColliders[i].setTranslationWrtParent({ x: _p.x, y: _p.y, z: _p.z });
     ld.bucketColliders[i].setRotationWrtParent({ x: _q.x, y: _q.y, z: _q.z, w: _q.w });
+  }
+  if (ld.bedPivot) {
+    ld.bedPivot.rotation.x = -(ld.bed || 0);
+    const fb = (ld.load || 0) / KINDS.truck.cap;
+    ld.bedHeap.visible = ld.kind === "truck" && fb > 0.03;
+    if (ld.bedHeap.visible) { ld.bedHeap.scale.set(1.15, 0.15 + 0.8 * fb, 1.95); ld.bedHeap.material.color.copy(ld.loadG > ld.load * 0.5 ? cGravel : cLoose); }
   }
   const f = ld.load / L.capacity;
   ld.heap.visible = f > 0.03;
@@ -991,12 +1185,33 @@ function pourFrom(matrix, vel, vol, gvol = 0) {
   spawnDirt(_pv.x, _pv.y, _pv.z, vel.x + _pd.x + (Math.random() - 0.5) * 0.5, vel.y + _pd.y, vel.z + _pd.z + (Math.random() - 0.5) * 0.5, vol, gvol);
 }
 function updateDirt() {
+  prepCatch();
   for (let i = parts.n - 1; i >= 0; i--) {
     const o = i * 3, x = parts.x, v = parts.v;
     v[o + 1] -= 9.81 * DT;
     x[o] += v[o] * DT; x[o + 1] += v[o + 1] * DT; x[o + 2] += v[o + 2] * DT;
-    if (x[o + 1] > heightAt(x[o], x[o + 2]) + 0.05) continue;
-    if (parts.vol[i] > 0) splat(x[o], x[o + 2], parts.vol[i], parts.g[i]);
+    let caught = false;
+    if (v[o + 1] < 0) {
+      for (const c of catchers) {
+        _rp.set(x[o], x[o + 1], x[o + 2]).applyMatrix4(c.inv);
+        if (Math.abs(_rp.x) < 1.2 && _rp.z > -3.0 && _rp.z < 1.3 && _rp.y > -0.3 && _rp.y < 2.4) {
+          caught = true;
+          if (parts.vol[i] > 0) {
+            if (c.who === 0) addLoad(parts.vol[i], parts.g[i]);
+            else { const pl = pendingLoad.get(c.who) || [0, 0]; pl[0] += parts.vol[i]; pl[1] += parts.g[i]; pendingLoad.set(c.who, pl); }
+          }
+          break;
+        }
+      }
+      if (!caught && hopper && Math.abs(x[o] - hopper.x) < 2.15 && Math.abs(x[o + 2] - hopper.z) < 2.15 && x[o + 1] < hopper.y0 + 1.5) {
+        caught = true;
+        if (parts.vol[i] > 0) { hopper.vol += parts.vol[i]; hopper.g += parts.g[i]; hopperD[0] += parts.vol[i]; hopperD[1] += parts.g[i]; }
+      }
+    }
+    if (!caught) {
+      if (x[o + 1] > heightAt(x[o], x[o + 2]) + 0.05) continue;
+      if (parts.vol[i] > 0) splat(x[o], x[o + 2], parts.vol[i], parts.g[i]);
+    }
     const l = --parts.n, lo = l * 3;                               // remove by moving the last clod into this slot
     x[o] = x[lo]; x[o + 1] = x[lo + 1]; x[o + 2] = x[lo + 2]; v[o] = v[lo]; v[o + 1] = v[lo + 1]; v[o + 2] = v[lo + 2];
     parts.vol[i] = parts.vol[l]; parts.g[i] = parts.g[l]; parts.s[i] = parts.s[l];
@@ -1037,7 +1252,7 @@ function digStep() {
       if (over <= 0.02) continue;
       // loose dirt scoops up fast; firm ground is shaved a little at a time, so the bucket can't bury itself
       const soft = Math.min(over, Math.max(0, heights[i] - firm[i]), L.looseRate * DT);
-      const hard = heights[i] - soft - firm[i] < 1e-3 ? Math.min(over - soft, L.firmRate * bite * DT) : 0;
+      const hard = !rockA[i] && heights[i] - soft - firm[i] < 1e-3 ? Math.min(over - soft, L.firmRate * bite * DT) : 0;
       cut -= addHeight(xi, zi, -(soft + hard)) * CELL * CELL; cutG += lastG * CELL * CELL; cutFirm += hard * CELL * CELL; touch(xi, zi);
     }
   }
@@ -1068,17 +1283,18 @@ function groundStep() {
   gripNow = (1 - 0.88 * smooth(0.42, 0.63, slope)) * (1 - 0.5 * m1 - 0.3 * deep) * (1 - 0.55 * bog);
   for (let i = 0; i < 4; i++) vehicle.setWheelFrictionSlip(i, L.slip * gripNow);
   if (mud > 0.05) {
-    const v = chassis.linvel(), j = Math.min(0.5, (4500 * m1 + 17000 * deep + 70000 * bog) * DT / L.mass) * L.mass;
+    const v = chassis.linvel(), j = Math.min(0.5, (4500 * m1 + 17000 * deep + 70000 * bog) * (me.kind === "truck" ? 1 + me.load / 6 : 1) * DT / L.mass) * L.mass;   // a loaded truck sinks
     chassis.applyImpulse({ x: -v.x * j, y: 0, z: -v.z * j }, true);
   }
 }
 
 // Road roller: any rock that gets under the front drum is crushed into a patch of gravel.
-const _ci = new THREE.Matrix4();
+const _ci = new THREE.Matrix4(), _bwr = new THREE.Matrix4();
 function rollStep(speed) {
   if (Math.abs(speed) < 0.3) return;
   const t = chassis.translation(), r = chassis.rotation();
-  _ci.compose(_cp.set(t.x, t.y, t.z), _cq.set(r.x, r.y, r.z, r.w), _one).invert();
+  _bwr.compose(_cp.set(t.x, t.y, t.z), _cq.set(r.x, r.y, r.z, r.w), _one);
+  _ci.copy(_bwr).invert();
   for (const k of props) {
     if (!k.active || k.type !== "rock" || (net.online && k.owner !== net.id && k.owner !== 0)) continue;
     const p = k.body.translation();
@@ -1088,21 +1304,97 @@ function rollStep(speed) {
     k.squash = under ? (k.squash || 0) + DT : 0;
     if (k.squash > 0.22) { k.squash = 0; layGravel(k.index, p.x, p.z, k.r); }
   }
+  // the drums also flatten loose ground: bumps are pressed down into the hollows beside them,
+  // and what they roll over is packed firm (it stops slumping)
+  const k = Math.min(1, Math.abs(speed) / 2) * 5 * DT;
+  for (const [dz, hw] of [[1.7, 1.35], [-1.5, 1.15]]) flattenUnder(hw, dz, k);
+}
+const _fl = [];
+function flattenUnder(hw, dz, k) {
+  _fl.length = 0;
+  let sum = 0;
+  for (let lx = -hw + 0.25; lx < hw; lx += CELL) for (let lz = dz - 0.5; lz <= dz + 0.5; lz += CELL) {
+    _rp.set(lx, 0, lz).applyMatrix4(_bwr);
+    const xi = Math.round((_rp.x + HALF) / CELL), zi = Math.round((_rp.z + HALF) / CELL);
+    if (xi < 1 || zi < 1 || xi >= G || zi >= G) continue;
+    const i = zi + xi * W;
+    if (_fl.includes(i)) continue;
+    _fl.push(i); sum += heights[i];
+  }
+  if (_fl.length < 4) return;
+  const mean = sum / _fl.length;
+  let down = 0, upWant = 0;
+  for (const i of _fl) { const d = heights[i] - mean; if (d > 0) down += Math.min(d * k, Math.max(0, heights[i] - firm[i])); else upWant += -d * k; }
+  const scale = upWant > 1e-6 ? Math.min(1, down / upWant) : 0, upGot = upWant * scale, take = upGot / Math.max(down, 1e-9);
+  let gRem = 0;
+  for (const i of _fl) {
+    const d = heights[i] - mean;
+    if (d > 0) { const c = Math.min(d * k, Math.max(0, heights[i] - firm[i])) * take; if (c > 1e-5) { addHeight(Math.floor(i / W), i % W, -c); gRem += lastG; } }
+  }
+  const gShare = upGot > 1e-6 ? gRem / upGot : 0;          // the part of what was pressed down that was gravel
+  for (const i of _fl) {
+    const xi = Math.floor(i / W), zi = i % W, d = heights[i] - mean;
+    if (d < 0 && scale > 0) { const a = -d * k * scale; addHeight(xi, zi, a, true, a * gShare); }
+    if (loose[i] && Math.abs(heights[i] - mean) < 0.06) firm[i] = Math.max(firm[i], heights[i] - 0.02);       // packed once it is level
+  }
 }
 function switchPad() {
   const t = chassis.translation();
   if (SITE === "hub") { const gh = houses.find((h) => h.garage); return gh && gh.b.inside(t.x, t.z) ? "garage" : null; }
-  return YARD && Math.hypot(t.x - YARD.x, t.z - YARD.z) < YARD.r ? "vehicle yard" : null;
+  return YARDS.some((y) => Math.hypot(t.x - y.x, t.z - y.z) < y.r) ? "vehicle yard" : null;
 }
-const rollerUnlocked = () => SITE === "river" || SITE === "ridge" || !!(progress.farm && progress.farm.done);
+const rollerUnlocked = () => testUnlock || SITE === "river" || SITE === "ridge" || !!(progress.farm && progress.farm.done);
+const truckUnlocked = () => testUnlock || SITE === "haul" || SITE === "flood" || !!(progress.haul && progress.haul.done);
+const KIND_ORDER = ["loader", "roller", "truck"];
+const kindOpen = (k) => k === "loader" || (k === "roller" ? rollerUnlocked() : truckUnlocked());
+function nextKind() {
+  const i = KIND_ORDER.indexOf(me.kind);
+  for (let n = 1; n < KIND_ORDER.length; n++) { const k = KIND_ORDER[(i + n) % KIND_ORDER.length]; if (kindOpen(k)) return k; }
+  return null;
+}
+const KIND_TIPS = { loader: "Bucket and winch.", roller: "Drive over rocks to crush them, and over loose ground to flatten and pack it. No bucket, same winch.",
+  truck: "Carries 18 m\u00b3. Raise the bed with \u2192 to pour it out the back, lower it with \u2190. Fill up under a hopper chute or from a friend's loader." };
 function switchVehicle() {
   if (!switchPad() || Math.abs(me.speed) > 2) return;
-  const next = me.kind === "loader" ? "roller" : "loader";
-  if (next === "roller" && !rollerUnlocked()) return showBanner("<b>Road roller locked</b>Finish Muddle Acres to unlock it.", 3500);
-  if (me.load > 0) { deposit(me.load, 1.6, me.loadG); me.load = 0; me.loadG = 0; }
+  const next = nextKind();
+  if (!next) return showBanner("<b>No other vehicles yet</b>Finish Muddle Acres to unlock the road roller.", 3500);
+  if (me.load > 0) { if (me.kind === "loader") deposit(me.load, 1.6, me.loadG); else { const t = chassis.translation(); splat(t.x, t.z, me.load, me.loadG); } me.load = 0; me.loadG = 0; }
+  me.bed = 0;
   setKind(me, next);
   try { localStorage.setItem("jobsite-kind", next); } catch {}
-  showBanner(`<b>${KINDS[next].name[0].toUpperCase() + KINDS[next].name.slice(1)}</b>${next === "roller" ? "Drive over rocks to crush them into gravel. No bucket, same winch." : "Bucket and winch."}`, 4000);
+  showBanner(`<b>${KINDS[next].name[0].toUpperCase() + KINDS[next].name.slice(1)}</b>${KIND_TIPS[next]}`, 4500);
+}
+
+// the truck pours out of the back of its bed; clods from loaders (and hoppers) land in beds and bins
+const _tw = new THREE.Matrix4(), _tv = new THREE.Vector3(), _tf = new THREE.Vector3();
+function truckPose(ld, out) { const t = ld.body.translation(), r = ld.body.rotation(); return out.compose(_cp.set(t.x, t.y, t.z), _cq.set(r.x, r.y, r.z, r.w), _one); }
+function truckPour(ld, vol, gvol, vel) {
+  truckPose(ld, _tw);
+  _tv.set((Math.random() - 0.5) * 2.2, 0.3 + Math.random() * 0.5, -3.2).applyMatrix4(_tw);
+  _tf.setFromMatrixColumn(_tw, 2).multiplyScalar(-(1.0 + Math.random()));
+  spawnDirt(_tv.x, _tv.y, _tv.z, vel.x + _tf.x, vel.y - 0.4, vel.z + _tf.z, vol, gvol);
+}
+function addLoad(v, g) {
+  const cap = KINDS.truck.cap, take = Math.min(v, cap - me.load);
+  if (take <= 0) return;
+  me.load += take; me.loadG += (g * take) / v;
+}
+const catchers = [], pendingLoad = new Map();
+function prepCatch() {
+  catchers.length = 0;
+  const add = (ld, who) => { if (ld.kind !== "truck" || (ld.bed || 0) > 0.3) return; catchers.push({ inv: truckPose(ld, new THREE.Matrix4()).invert(), who }); };
+  if (me.load < KINDS.truck.cap - 0.01) add(me, 0);
+  for (const pr of net.peers.values()) if (pr.seen) add(pr.loader, pr.id);
+}
+function truckStep() {
+  me.bed = clamp((me.bed || 0) - input.tilt * 0.55 * DT, 0, 0.95);
+  if (me.bed > 0.45 && me.load > 0) {
+    const out = Math.min(me.load, 3.4 * DT * clamp((me.bed - 0.45) / 0.3, 0.3, 1)), gf = clamp(me.loadG / me.load, 0, 1);
+    me.load -= out; me.loadG = Math.max(0, me.loadG - out * gf); if (me.load < 1e-3) { me.load = 0; me.loadG = 0; }
+    pourAcc += out;
+    const v = chassis.linvel(), step = PVOL * 1.5;
+    while (pourAcc >= step || (me.load === 0 && pourAcc > 1e-5)) { const vol = Math.min(step, pourAcc); pourAcc -= vol; truckPour(me, vol, vol * gf, v); }
+  }
 }
 
 function driveStep() {
@@ -1115,11 +1407,12 @@ function driveStep() {
   bucketFrame();
 
   const speed = me.speed = vehicle.currentVehicleSpeed();
-  if (isLoader) { scoopAssist(speed); digStep(); } else rollStep(speed);
+  if (isLoader) { scoopAssist(speed); digStep(); } else if (me.kind === "roller") rollStep(speed); else truckStep();
   groundStep();
   const against = input.fwd !== 0 && Math.sign(input.fwd) !== Math.sign(speed) && Math.abs(speed) > 1.2;
   const top = input.fwd > 0 ? KV.maxSpeed : KV.reverseSpeed;
-  const force = input.fwd !== 0 && !against && !input.brake ? input.fwd * KV.engine * clamp(1.15 - Math.abs(speed) / top, 0, 1) : 0;
+  const heavy = me.kind === "truck" ? 1 / (1 + (0.6 * me.load) / KV.cap) : 1;          // a full truck is slow uphill
+  const force = input.fwd !== 0 && !against && !input.brake ? input.fwd * KV.engine * heavy * clamp(1.15 - Math.abs(speed) / top, 0, 1) : 0;
   const brake = input.brake || against ? L.brake : input.fwd === 0 ? L.idleBrake : 0;
   const steerTarget = input.turn * KV.steer * lerp(1, 0.55, clamp(Math.abs(speed) / L.maxSpeed, 0, 1));
   me.steer += clamp(steerTarget - me.steer, -2.2 * DT, 2.2 * DT);
@@ -1256,16 +1549,23 @@ function pullOn(prop) {
 // ---------- level state ----------
 const FL = { stump: 1, logs: 2, boulders: 4, fill: 8, open: 16, done: 32, tractor: 64 };
 let flags = 0;
-const job = { time: 0, fill: 0, logsIn: 0, bouldersIn: 0, stumpPull: 0, stuck: 0, moved: false, ended: false };
+const job = { time: 0, fill: 0, logsIn: 0, bouldersIn: 0, stumpPull: 0, stuck: 0, moved: false, ended: false, water: SITE === "flood" ? FLOOD.water.start : 0, hold: 0, crest: null, floodVis: 0, cover: 0 };
 function sinkDeficit() { let d = 0; for (let k = 0; k < sinkIdx.length; k++) d += Math.max(0, sinkTarget[k] - heights[sinkIdx[k]]); return d * CELL * CELL; }
 const SINK_START = SITE === "farm" ? sinkDeficit() : 1;
 function setFlag(f) { if (flags & f) return; flags |= f; onFlag(f); }
 const RIDGE_BANNER = { 2: "<b>Landslide cleared!</b>The road is open as far as the gully.", 4: "<b>Gully filled!</b>You can tow the cabin up to the last climb.",
   1: "<b>Firewood delivered!</b>Bonus job done.", 64: "<b>Every rock crushed!</b>Bonus job done." };
+const SITE_BANNER = {
+  haul: { 1: "<b>Picnic tables delivered!</b>Bonus job done.", 2: "<b>Pit road open!</b>The gravel pit and its hopper are yours.",
+    4: "<b>Ford graveled!</b>A loaded truck can cross the stream now.", 64: "<b>Hairpin graveled!</b>Bonus job done." },
+  flood: { 1: "<b>Both cars rescued!</b>Bonus job done.", 4: "<b>Floodgate closed!</b>", 8: "<b>All three breaches plugged!</b>Hold on until the river peaks." },
+};
 function onFlag(f) {
   if (SITE === "ridge" && RIDGE_BANNER[f]) showBanner(RIDGE_BANNER[f], 5000);
   if (f === FL.stump && stump) { stump.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true); showBanner("<b>Stump pulled!</b>Bonus job done.", 4000); }
-  if (f === FL.tractor && SITE !== "ridge") showBanner(SITE === "river" ? "<b>Every rock crushed!</b>Bonus job done." : "<b>Tractor rescued!</b>Bonus job done.", 4000);
+  if (SITE_BANNER[SITE] && SITE_BANNER[SITE][f]) showBanner(SITE_BANNER[SITE][f], 5000);
+  if (SITE === "flood" && f === 4) lockGate();
+  if (f === FL.tractor && (SITE === "farm" || SITE === "river")) showBanner(SITE === "river" ? "<b>Every rock crushed!</b>Bonus job done." : "<b>Tractor rescued!</b>Bonus job done.", 4000);
   if (SITE === "river" && f === FL.logs) showBanner("<b>Causeway built!</b>You can drive across the river now.", 5000);
   if (SITE === "river" && f === FL.boulders) showBanner("<b>Gravel road laid!</b>Go and fetch the generator.", 5000);
   if (f === FL.stump && SITE === "river") showBanner("<b>Toolbox recovered!</b>Bonus job done.", 4000);
@@ -1292,7 +1592,7 @@ function buildSync() {
   for (let i = 0; i < heights.length; i++) if (heights[i] !== base[i]) tr.push(i, Math.round(heights[i] * 1000));
   const gt = [];
   for (let i = 0; i < gravH.length; i++) if (gravH[i] > 0.001) gt.push(i, Math.round(gravH[i] * 1000));
-  return { t: "sync", ver: SYNC_VER, site: SITE, rk, tr, time: Math.round(job.time), flags, nb: activeBoulders, gv: gravel, gt };
+  return { t: "sync", ver: SYNC_VER, site: SITE, rk, tr, time: Math.round(job.time), flags, nb: activeBoulders, gv: gravel, gt, hop: hopper ? [r3(hopper.vol), r3(hopper.g)] : null, wl: job.water, wh: job.hold };
 }
 function applySync(s) {
   if (!s || s.ver !== SYNC_VER || s.site !== SITE || !Array.isArray(s.rk) || !Array.isArray(s.tr)) return;
@@ -1312,6 +1612,8 @@ function applySync(s) {
     if (b.isDynamic()) { b.setLinvel({ x: 0, y: 0, z: 0 }, true); b.setAngvel({ x: 0, y: 0, z: 0 }, true); }
   }
   job.time = s.time || 0;
+  if (Array.isArray(s.hop) && hopper) { hopper.vol = +s.hop[0] || 0; hopper.g = +s.hop[1] || 0; }
+  if (SITE === "flood" && typeof s.wl === "number") { job.water = s.wl; job.hold = +s.wh || 0; }
 }
 
 function setRoster(list) {
@@ -1368,13 +1670,16 @@ function connect(room, name) {
 
 function onPeerMessage(from, m) {
   if (m.t === "sync") return applySync(m);
+  if (m.t === "ld") { if (me.kind === "truck") addLoad(+m.v || 0, +m.g || 0); return; }      // a friend tipped their bucket into my truck
   const peer = net.peers.get(from);
   if (m.t !== "s" || !peer) return;
-  peer.snaps.push({ at: performance.now(), p: m.p, q: m.q, a: m.a, b: m.b, w: m.w, l: m.l, v: m.v });
+  peer.snaps.push({ at: performance.now(), p: m.p, q: m.q, a: m.a, b: m.b, w: m.w, l: m.l, v: m.v, bd: m.bd || 0 });
+  if (Array.isArray(m.hd) && hopper) { hopper.vol = Math.max(0, hopper.vol + m.hd[0]); hopper.g = clamp(hopper.g + m.hd[1], 0, hopper.vol); }
+  if (SITE === "flood" && typeof m.wl === "number" && from === net.hostId) { if (job.water - m.wl > 0.3) floodShow(); job.water = m.wl; job.hold = +m.wh || 0; }
   if (peer.snaps.length > 12) peer.snaps.shift();
   peer.pos.set(m.p[0], m.p[1], m.p[2]);
   peer.h = Array.isArray(m.h) ? m.h : null;
-  setKind(peer.loader, m.k === 1 ? "roller" : "loader");
+  setKind(peer.loader, KIND_ORDER[m.k] || "loader");
   if (Array.isArray(m.lk)) {
     const key = m.lk.join(",");
     if (key !== peer.lookKey) { peer.lookKey = key; applyLook(peer.loader, cleanLook(m.lk)); renderRoster(); }
@@ -1428,12 +1733,16 @@ function sendState() {
   const eg = [];
   for (const [i, d] of netG) { const mm = Math.round(d * 1000); if (mm) eg.push(i, mm); }
   netG.clear();
-  const m = { t: "s", p: [r3(t.x), r3(t.y), r3(t.z)], q: [r3(q.x), r3(q.y), r3(q.z), r3(q.w)], a: r3(me.arm), b: r3(me.tilt), w: r3(me.steer), l: r3(me.load), v: r3(me.speed), k: me.kind === "roller" ? 1 : 0 };
+  const m = { t: "s", p: [r3(t.x), r3(t.y), r3(t.z)], q: [r3(q.x), r3(q.y), r3(q.z), r3(q.w)], a: r3(me.arm), b: r3(me.tilt), w: r3(me.steer), l: r3(me.load), v: r3(me.speed), k: KIND_ORDER.indexOf(me.kind), bd: r3(me.bed || 0) };
   if (winch.on) m.h = [winch.kind, winch.ref, r3(winch.local.x), r3(winch.local.y), r3(winch.local.z), r3(winch.len), Math.round(winch.T)];
   if (flags) m.fl = flags;
   if (lookDirty || stepCount % 60 === 0) { m.lk = lookArr(myLook); lookDirty = false; }     // paint job: when it changes, and every second for newcomers
   if (SITE === "farm") m.nb = activeBoulders;
   if (gravel.length) m.gv = gravel;
+  for (const [id, [v, g]] of pendingLoad) if (v > 1e-4) send({ t: "to", to: id, m: { t: "ld", v: r3(v), g: r3(g) } });
+  pendingLoad.clear();
+  if (hopper && Math.abs(hopperD[0]) > 1e-4) { m.hd = [r3(hopperD[0]), r3(hopperD[1])]; hopperD[0] = hopperD[1] = 0; }
+  if (SITE === "flood" && net.hostId === net.id) { m.wl = r3(job.water); m.wh = r3(job.hold); }
   if (rk.length) m.r = rk;
   if (e.length) m.e = e;
   if (eg.length) m.eg = eg;
@@ -1459,9 +1768,10 @@ function updatePeers() {
       ld.body.setTranslation(to, true); ld.body.setRotation(rot, true);
     } else { ld.body.setNextKinematicTranslation(to); ld.body.setNextKinematicRotation(rot); }
     ld.group.visible = true; peer.seen = true;
-    ld.arm = lerp(a.a, b.a, k); ld.tilt = lerp(a.b, b.b, k); ld.steer = lerp(a.w, b.w, k); ld.load = b.l; ld.speed = b.v;
+    ld.arm = lerp(a.a, b.a, k); ld.tilt = lerp(a.b, b.b, k); ld.steer = lerp(a.w, b.w, k); ld.load = b.l; ld.speed = b.v; ld.bed = lerp(a.bd, b.bd, k);
     poseBucket(ld);
-    if (b.b < -0.12 && b.l > 0.02) {
+    if (ld.kind === "truck" && ld.bed > 0.5 && b.l > 0.05 && Math.random() < 0.6) truckPour(ld, 0, 0, ZERO);
+    if (ld.kind === "loader" && b.b < -0.12 && b.l > 0.02) {
       _pm.compose(_pp.set(to.x, to.y, to.z), _qa, _one).multiply(ld.armPivot.matrix).multiply(ld.bucketPivot.matrix);
       pourFrom(_pm, ZERO, 0);
     }
@@ -1622,6 +1932,12 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyE" && running) toggleWinch();
   if (e.code === "KeyF" && running) switchVehicle();
   if (e.code === "KeyG" && running) openCustom();
+  if (e.code === "KeyP") {
+    testUnlock = !testUnlock;
+    try { localStorage.setItem("jobsite-unlock", testUnlock ? "1" : "0"); } catch {}
+    refreshSigns();
+    showBanner(testUnlock ? "<b>Test mode: everything unlocked</b>All levels and vehicles. Press P again to lock them." : "<b>Test mode off</b>Levels and vehicles follow your real progress again.", 3500);
+  }
   if (e.code === "KeyH") toggleHints();
   if (pad.on) { pad.on = false; refreshHelp(); }          // back on the keyboard: show keyboard keys again
 });
@@ -1665,12 +1981,15 @@ function setHint(html) {
   elHint.dataset.h = html; elHint.innerHTML = html ? `<span>&#128161;</span> ${html}` : "";
   elHint.style.display = hintsOn && html ? "block" : "none";
 }
-const isLocked = (hs) => !!hs.locked || (!!hs.needs && !(progress[hs.needs] && progress[hs.needs].done));
+// P unlocks every level and vehicle for play-testing (kept in this browser only; your real progress is untouched)
+let testUnlock = false;
+try { testUnlock = localStorage.getItem("jobsite-unlock") === "1"; } catch {}
+const isLocked = (hs) => !testUnlock && (!!hs.locked || (!!hs.needs && !(progress[hs.needs] && progress[hs.needs].done)));
 function refreshSigns() {
   for (const hs of houses) {
     const p = progress[hs.id];
     if (hs.garage) hs.b.sign.userData.draw(hs.title, "Switch vehicles here", "#c9a6ff");
-    else if (isLocked(hs)) hs.b.sign.userData.draw(hs.title, hs.needs ? `Finish level ${hs.needs === "farm" ? 1 : 2} first` : "Locked", "#aab3be");
+    else if (isLocked(hs)) hs.b.sign.userData.draw(hs.title, hs.needs ? `Finish level ${LEVEL_NUM[hs.needs]} first` : "Locked", "#aab3be");
     else hs.b.sign.userData.draw(hs.title, p && p.done ? `★ Done in ${clock(p.best)}` : "Drive in to start", p && p.done ? "#8be28b" : "#ffc928");
   }
 }
@@ -1805,12 +2124,12 @@ function riverStep() {
   if (!job.ended) job.time += DT;
 }
 // how much of a belt (z0..z1) can be crossed: for each row, is there a strip 3.5 m wide that passes ok()?
-function crossable(z0, z1, xr, ok) {
+function crossable(z0, z1, xr, ok, need = 7) {
   let rows = 0, good = 0;
   for (let z = z0; z <= z1; z += 1) {
     rows++;
     let run = 0, pass = false;
-    for (let x = -xr; x <= xr && !pass; x += 0.5) { run = ok(x, z) ? run + 1 : 0; if (run >= 7) pass = true; }
+    for (let x = -xr; x <= xr && !pass; x += 0.5) { run = ok(x, z) ? run + 1 : 0; if (run >= need) pass = true; }
     if (pass) good++;
   }
   return good / rows;
@@ -1879,9 +2198,9 @@ function ridgeStep() {
 }
 function checkRidge() {
   const R = RIDGE, at = (p, o) => { const t = p.body.translation(); return Math.hypot(t.x - o.x, t.z - o.z) < o.r && t.y > R.top - 1; };
-  job.fill = crossable(R.slide.z - R.slide.len + 1, R.slide.z + R.slide.len - 1, 6, (x, z) => heightAt(x, z) < ridgeRoad(z) + 0.45);
+  job.fill = crossable(R.slide.z - R.slide.len + 1, R.slide.z + R.slide.len - 1, 6, (x, z) => heightAt(x, z) < ridgeRoad(z) + 0.45, 10);       // 5 m wide: room for the cabin
   if (job.fill >= 1) setFlag(FL.logs);
-  job.road = crossable(R.gully.z0, R.gully.z1, 6, (x, z) => heightAt(x, z) > ridgeRoad(z) - 0.55);
+  job.road = crossable(R.gully.z0, R.gully.z1, 6, (x, z) => Math.abs(heightAt(x, z) - ridgeRoad(z)) < 0.55, 10);
   if (job.road >= 1) setFlag(FL.boulders);
   const cp = cabin.body.translation(), atStage = cp.z > R.stage.z0 - 3 && cp.y > 11;
   if (atStage) setFlag(FL.fill);
@@ -1909,7 +2228,7 @@ function checkRidge() {
     : `A landslide blocks the road. Dig a way through: lower the bucket ${K("&darr;")} and drive into it. Push the rocks aside, or crush them.`;
   else if (!filled) h = me.load > 0.5
     ? `Tip the load ${K("&rarr;")} into the gully. Keep filling until a strip of road reaches the far side.`
-    : "The road is washed out ahead. Fill the gully with what is left of the landslide: scoop a bucketful, carry it up and tip it in.";
+    : `The road is washed out ahead. Fill the gully with what is left of the landslide, about 5 m wide so the cabin fits. Bumpy fill? The <b>road roller</b> (${K("F")} at the purple yard) flattens it.`;
   else if (!staged) h = towing
     ? "Tow the cabin up the road, over your fill, to the flat spot at the foot of the last steep climb."
     : `Road open! Go back for the cabin near the start: turn your back to it, hook it with ${K("E")} and tow it up the road.`;
@@ -1923,8 +2242,173 @@ function checkRidge() {
   }
   setHint(h);
 }
-const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep(), ridge: () => ridgeStep() }[SITE];
-const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver(), ridge: () => checkRidge() }[SITE];
+// ----- shared: hold the bucket down on a rock to crush it -----
+function smashRocks() {
+  let hit = -1;
+  if (me.kind === "loader" && input.arm < 0 && me.tilt > -0.3) {
+    for (const k of props) {
+      if (!k.active || k.type !== "rock" || !mineP(k)) continue;
+      const p = k.body.translation();
+      _rp.set(p.x, p.y, p.z).applyMatrix4(_bi);
+      if (Math.abs(_rp.x) < 1.5 && _rp.z > -0.4 && _rp.z < 1.7 && _rp.y < 0.1 && _rp.y > -(k.r * 1.6 + 0.5)) { hit = k.index; break; }
+    }
+  }
+  if (hit >= 0 && hit === smash.i) {
+    if ((smash.t += DT) > 0.4) { const k = props[hit], p = k.body.translation(); layGravel(hit, p.x, p.z, k.r); smash.t = 0; smash.i = -1; }
+  } else { smash.i = hit; smash.t = 0; }
+}
+const coverOf = (cells, min) => { let n = 0; for (const i of cells) if (gravH[i] >= min) n++; return cells.length ? n / cells.length : 0; };
+
+// ----- Gravel Run rules -----
+const _bc = new THREE.Vector3();
+function haulStep() {
+  const H = HAUL, t = chassis.translation();
+  smashRocks();
+  // a truck parked under the chute with its bed down fills from the hopper
+  if (me.kind === "truck" && me.bed < 0.2 && hopper.vol > 0.01 && me.load < KINDS.truck.cap - 0.01) {
+    truckPose(me, _tw); _bc.set(0, 0.5, -0.9).applyMatrix4(_tw);
+    if (Math.hypot(_bc.x - H.bay.x, _bc.z - H.bay.z) < H.bay.r) {
+      const take = Math.min(4.5 * DT, hopper.vol, KINDS.truck.cap - me.load), gf = hopper.vol > 0 ? clamp(hopper.g / hopper.vol, 0, 1) : 0;
+      hopper.vol -= take; hopper.g = Math.max(0, hopper.g - take * gf); hopperD[0] -= take; hopperD[1] -= take * gf;
+      me.load += take; me.loadG += take * gf;
+      if (Math.random() < 0.5) spawnDirt(H.bay.x + (Math.random() - 0.5) * 1.2, heightAt(H.bay.x, H.bay.z) + 4.5, H.bay.z + (Math.random() - 0.5) * 0.8, 0, -1, 0, 0, 1);
+    }
+  }
+  if (!job.moved && Math.hypot(t.x - H.spawn.x, t.z - H.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function checkHaul() {
+  const H = HAUL, P = H.pad, t = chassis.translation();
+  const lp = blockLog.body.translation(), logInWay = Math.abs(lp.x + 34) < 5.5 && lp.z > 34 && lp.z < 50;
+  const rocksLeft = blockRocks.filter((k) => k.active).length;
+  if (!logInWay && rocksLeft === 0) setFlag(2);
+  job.road = crossable(H.stream.z - H.stream.w + 0.5, H.stream.z + H.stream.w - 0.5, 85, (x, z) => mudAt(x, z) < 0.35, 10);
+  if (job.road >= 1) setFlag(4);
+  job.cover = coverOf(padCells, 0.03);
+  if (job.cover >= 0.85 && (flags & 2) && (flags & 4)) setFlag(32);
+  if (coverOf(pinCells, 0.06) >= 0.8) setFlag(64);
+  const pc = picnic.body.translation();
+  if (Math.abs(pc.x - P.x) < P.w / 2 && Math.abs(pc.z - P.z) < P.d / 2) setFlag(1);
+  hopper.heap.visible = hopper.vol > 0.3; hopper.heap.scale.set(1, clamp(hopper.vol / hopper.cap, 0.05, 1) * 0.6, 1);
+  fordMarker4.beam.visible = !(flags & 4); bayMarker.beam.visible = !!(flags & 2) && hopper.vol > 1;
+  const ford = !!(flags & 4), road = !!(flags & 2), pct = Math.min(100, Math.floor((job.cover / 0.85) * 100));
+  elTasks.innerHTML = `<h2>Gravel Run</h2>
+    ${row(ford, `Gravel the stream ford: ${ford ? 100 : Math.floor(job.road * 100)}%`)}
+    ${row(road, `Clear the pit road: tree ${logInWay ? "in the way" : "moved"}, boulders left ${rocksLeft}`)}
+    ${row(flags & 32, `Gravel the campsite pad: ${pct}%`, ford && road ? "" : "sub")}
+    <div class="sub">Hopper: ${hopper.vol.toFixed(0)} / ${hopper.cap} m\u00b3</div>
+    <div class="sub" style="margin-top:6px">Bonus</div>
+    ${row(flags & 1, "Bring the picnic tables from the pit to the pad", "sub")}
+    ${row(flags & 64, "Gravel the hairpin bend too", "sub")}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  let h = "";
+  const truck = me.kind === "truck", gravelIn = me.loadG > me.load * 0.5 && me.load > 0.5;
+  if (!job.moved) h = `The campsite needs a gravel pad (yellow outline). The gravel is in a pit at the top of the switchback road, across a boggy stream. Start by making the ford passable.`;
+  else if (!ford) h = gravelIn
+    ? `Tip the gravel ${K("&rarr;")} onto the bog at the <b class="o">ford</b> (orange ring). Pour while you creep forward to lay a strip 5 m wide right across.`
+    : `The stream is bog. Crush the grey rocks near it into gravel: raise the bucket ${K("&uarr;")}, hang it over a rock and hold ${K("&darr;")}. Then scoop the gravel and spread it on the ford.`;
+  else if (!road) h = `Drive up the switchbacks to the pit. A fallen tree and two boulders block the pit road: winch the tree off the road (${K("E")}) and crush the boulders.`;
+  else if (truck && me.load > 1) h = `Drive down to the campsite pad. Raise the bed ${K("&rarr;")} just until gravel starts to pour, then keep driving: a slow pour on the move lays a thin, even layer. Take the hairpin slowly: the hillside is too steep to climb back.`;
+  else if (truck) h = `Fill up: park with the bed under the <b class="o">hopper chute</b> (orange ring by the pit), bed down. Or have a friend tip their loader into your bed.`;
+  else if (t.z > 30) h = `Scoop gravel from the pit and tip it into the hopper bin (sign). Then switch to the truck at the pit's <b class="p">vehicle yard</b> with ${K("F")} and park under the chute.`;
+  else if (job.cover > 0.3) h = `Spread the piles thin: push with a level bucket, or pour while driving. The road roller flattens bumps and keeps gravel as gravel. ${pct}% covered.`;
+  else h = "Head up to the pit for gravel. A dump truck carries three buckets at once; the hopper lets you load it on your own.";
+  setHint(h);
+}
+
+// ----- Flood Season rules -----
+function leveeCrest() {
+  const F = FLOOD, closed = !!(flags & 4);
+  let min = 1e9, at = 0;
+  const per = F.breaches.map(() => 1e9);
+  for (let x = -86; x <= 86; x += 0.5) {
+    let c = -9;
+    for (let z = F.levee.z - 4; z <= F.levee.z + 4; z += 0.5) c = Math.max(c, heightAt(x, z));
+    const dg = Math.abs(x - F.gate.x);
+    if (dg < F.gate.w / 2 + 0.95) c = dg > F.gate.w / 2 ? 3.0 : closed ? 2.8 : c;          // concrete walls, and the gate once it is in
+    F.breaches.forEach((b, n) => { if (Math.abs(x - b.x) <= b.w / 2 + 1) per[n] = Math.min(per[n], c); });
+    if (c < min) { min = c; at = x; }
+  }
+  return { min, at, per };
+}
+function floodShow() {
+  job.floodVis = 6;
+  showBanner("<b>The river broke through!</b>The village is flooding. The surge will pass, but the water is coming back: plug the gap.", 6000);
+}
+function floodStep() {
+  const F = FLOOD, W2 = F.water, t = chassis.translation();
+  const host = !net.online || net.hostId === net.id, n = net.online ? Math.max(1, net.roster.length) : 1;
+  if (stepCount % 30 === 0) job.crest = leveeCrest();
+  if (host && job.time > W2.grace) {
+    const rate = (W2.peak - W2.start) / (W2.riseSolo / (1 + 0.3 * (n - 1)));
+    if (job.water < W2.peak) job.water = Math.min(W2.peak, job.water + rate * DT); else job.hold += DT;
+    if (job.crest && job.water > job.crest.min + 0.02) {          // the river finds the lowest gap
+      setFlag(2);
+      job.water = Math.max(W2.start, job.crest.min - 0.6); job.hold = 0;
+      floodShow();
+    }
+    if (job.hold > W2.hold && (flags & 4) && (flags & 8)) { if (!(flags & 2)) setFlag(64); setFlag(32); }
+  }
+  riverWater.position.y = job.water;
+  if (job.floodVis > 0) { job.floodVis -= DT; floodWater.visible = true; floodWater.position.y = lerp(0.1, 0.9, Math.min(1, job.floodVis / 3)); } else floodWater.visible = false;
+  // the floodgate locks once it is pushed into its slot
+  if (gate.active && mineP(gate)) {
+    const gp = gate.body.translation(), r = gate.body.rotation(), ax = Math.abs(1 - 2 * (r.y * r.y + r.z * r.z));
+    if (Math.abs(gp.x - F.gate.x) < 1.0 && Math.abs(gp.z - F.levee.z) < 2.6 && ax > 0.8) setFlag(4);
+  }
+  // cars: out past the levee is rescued; caught by the water before that, they're stuck
+  for (const c of cars) {
+    if (c.rescued || c.lost) continue;
+    const p = c.body.translation();
+    if (p.z < F.safeZ) c.rescued = true;
+    else if (job.water > heightAt(p.x, p.z) + 0.6) { c.lost = true; c.body.setBodyType(RAPIER.RigidBodyType.Fixed, true); showBanner("<b>A car was caught by the water</b>The car bonus is lost.", 4000); }
+  }
+  if (cars.every((c) => c.rescued)) setFlag(1);
+  // deep water sweeps a vehicle back to dry ground
+  const depth = t.z > F.levee.z - 1 ? job.water - heightAt(t.x, t.z) : -1;       // behind the levee it's dry
+  if (depth > 1.3) {
+    if ((safe.wet += DT) > 1.2) { hookOff(); placeLoader(safe.x, safe.z, safe.yaw); safe.wet = 0; showBanner("<b>Too deep!</b>Back on dry ground.", 3000); }
+  } else {
+    safe.wet = Math.max(0, safe.wet - DT);
+    if (stepCount % 30 === 0 && depth < 0 && t.z < F.levee.z - 6) { safe.x = t.x; safe.z = t.z; safe.yaw = heading(); }
+  }
+  if (!job.moved && Math.hypot(t.x - F.spawn.x, t.z - F.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function checkFlood() {
+  const F = FLOOD, W2 = F.water, cr = job.crest || leveeCrest(), need = W2.peak + 0.1;
+  const plugged = cr.per.map((c) => c >= need), nPlug = plugged.filter(Boolean).length;
+  if (nPlug === F.breaches.length) setFlag(8);
+  breachBeams.forEach((b, n) => { b.visible = n < F.breaches.length ? !plugged[n] : !(flags & 4); });
+  lowBeam.position.x = cr.at; lowBeam.visible = cr.min - job.water < 0.8 && !(flags & 32);
+  const n = net.online ? Math.max(1, net.roster.length) : 1, rate = (W2.peak - W2.start) / (W2.riseSolo / (1 + 0.3 * (n - 1)));
+  const left = job.time < W2.grace ? W2.grace - job.time + (W2.peak - job.water) / rate : (W2.peak - job.water) / rate;
+  const margin = cr.min - job.water, rescued = cars.filter((c) => c.rescued).length;
+  const where = Math.abs(cr.at - F.gate.x) < 3 ? "the floodgate" : (F.breaches.find((b) => Math.abs(cr.at - b.x) < b.w / 2 + 2) || { name: `x ${cr.at.toFixed(0)}` }).name;
+  elTasks.innerHTML = `<h2>Flood Season</h2>
+    ${row(flags & 4, "Close the floodgate (push the grey gate into the slot)")}
+    ${row(flags & 8, `Plug the three breaches above the peak: ${nPlug} / ${F.breaches.length}`)}
+    ${row(flags & 32, job.water >= W2.peak ? `Hold until the river falls: ${Math.max(0, W2.hold - job.hold).toFixed(0)} s` : `Hold the river until it peaks (${clock(left)} to go)`)}
+    <div class="${margin < 0.4 ? "hot" : "sub"}">River ${job.water.toFixed(2)} m &middot; lowest point of the levee ${cr.min.toFixed(2)} m at ${where}</div>
+    <div class="sub" style="margin-top:6px">Bonus</div>
+    ${row(flags & 1, `Rescue the cars from the floodplain: ${rescued} / ${cars.length}`, "sub")}
+    ${row((flags & 64) || ((flags & 32) && !(flags & 2)), flags & 2 ? "No flooding (lost)" : "Finish without the village flooding", "sub")}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  let h = "";
+  const carsOut = cars.some((c) => !c.rescued && !c.lost);
+  if (!job.moved) h = `The river is rising behind the levee. The village has about ${Math.round(left / 60)} minutes. Close the floodgate and plug the three breaches (orange beams) above the peak. Lowest first!`;
+  else if (margin < 0.35) h = `The river is ${margin.toFixed(2)} m from coming over at <b>${where}</b> (red beam). Get dirt there now!`;
+  else if (carsOut && job.water < 0 && !(flags & 4)) h = "Two cars are parked outside the levee. Tow them in through a breach or the floodgate slot before you close it (bonus). The water reaches them soon.";
+  else if (!(flags & 4)) h = `Push or winch the grey floodgate into the slot in the levee (between the concrete walls), lined up with it.`;
+  else if (!(flags & 8)) h = `Fill the breaches with dirt from the borrow pits: above ${need.toFixed(1)} m all the way across. The ${where} is the lowest point right now. A dump truck from the <b class="p">vehicle yard</b> carries three buckets.`;
+  else h = "The levee is ready. Watch the lowest point until the river peaks and falls.";
+  setHint(h);
+}
+
+const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep(), ridge: () => ridgeStep(), haul: () => haulStep(), flood: () => floodStep() }[SITE];
+const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver(), ridge: () => checkRidge(), haul: () => checkHaul(), flood: () => checkFlood() }[SITE];
 function checkHub() {
   const rows = houses.map((hs) => {
     const p = progress[hs.id];
@@ -2034,22 +2518,23 @@ function syncVisuals(dt, now = performance.now()) {
   sun.target.position.copy(_target);
   sun.position.copy(_target).addScaledVector(SUN_DIR, 110);
 
-  const fill = me.load / L.capacity;
+  const isTruck = me.kind === "truck", fill = me.load / (isTruck ? KINDS.truck.cap : L.capacity), noun = isTruck ? "Bed" : "Bucket";
   elFillBar.style.width = `${Math.round(fill * 100)}%`;
   const gp = me.load > 0.05 ? Math.round((me.loadG / me.load) * 100) : 0;
   const stuff = me.load > 0.05 ? (gp >= 85 ? "gravel" : gp >= 15 ? `${gp}% gravel` : "dirt") : "";
   elFillBar.style.background = gp >= 50 ? "#b9bcc2" : fill > 0.98 ? "#8be28b" : "#c08a4a";
-  elFillText.textContent = (fill > 0.98 ? "Bucket full" : `Bucket ${Math.round(fill * 100)}%`) + (stuff ? ` \u00b7 ${stuff}` : "");
+  elFillText.textContent = (fill > 0.98 ? `${noun} full` : `${noun} ${Math.round(fill * 100)}%`) + (stuff ? ` \u00b7 ${stuff}` : "");
   const kmh = Math.abs(me.speed) * 3.6;
-  elFill.style.display = me.kind === "loader" ? "block" : "none";
-  if (me.kind !== "loader") elGauges.innerHTML = `<b>${kmh.toFixed(0)}</b> km/h &nbsp; ${KINDS[me.kind].name}`;
+  elFill.style.display = me.kind !== "roller" ? "block" : "none";
+  if (isTruck) elGauges.innerHTML = `<b>${kmh.toFixed(0)}</b> km/h &nbsp; dump truck &nbsp; bed ${me.bed > 0.45 ? "tipping" : me.bed > 0.05 ? "raised" : "down"}`;
+  else if (me.kind !== "loader") elGauges.innerHTML = `<b>${kmh.toFixed(0)}</b> km/h &nbsp; ${KINDS[me.kind].name}`;
   else elGauges.innerHTML = `<b>${kmh.toFixed(0)}</b> km/h &nbsp; arms ${Math.round(((me.arm - L.armMin) / (L.armMax - L.armMin)) * 100)}% &nbsp; bucket ${me.tilt > 0.25 ? "curled" : me.tilt < -0.12 ? "dumping" : "level"}`;
   let pr = "";
   if (winch.on) {
     const strain = winch.T / WINCH.tmax;
     pr = `Winch on <b>${winch.name}</b> &middot; rope ${winch.len.toFixed(0)} m ${strain > 0.95 ? '<span class="hot">&middot; full power</span>' : strain > 0.05 ? "&middot; pulling" : ""}<br>${K("Q")} reel in &nbsp; ${K("X")} let out &nbsp; ${K("E")} unhook`;
   } else if (target && running) pr = `${K("E")} hook winch to <b>${target.name}</b> (${target.dist.toFixed(0)} m)`;
-  if (padNow && running && !customOpen) pr += `${pr ? "<br>" : ""}${K("F")} switch to the <b>${KINDS[me.kind === "loader" ? "roller" : "loader"].name}</b>${me.kind === "loader" && !rollerUnlocked() ? " (locked)" : ""}`;
+  if (padNow && running && !customOpen) { const nk = nextKind(); pr += `${pr ? "<br>" : ""}${nk ? `${K("F")} switch to the <b>${KINDS[nk].name}</b>` : "No other vehicles unlocked yet"}`; }
   if (padNow === "garage" && running && !customOpen) pr += `<br>${K("G")} paint shop`;
   if (customOpen && padNow !== "garage") closeCustom();
   if (elPrompt.dataset.h !== pr) { elPrompt.dataset.h = pr; elPrompt.innerHTML = pr; elPrompt.style.display = pr ? "block" : "none"; }
@@ -2109,14 +2594,14 @@ document.getElementById("join").addEventListener("click", () => {
 });
 for (const b of elStart.querySelectorAll("button")) b.disabled = false;
 elMsg.textContent = "";
-try { if (localStorage.getItem("jobsite-kind") === "roller" && rollerUnlocked()) setKind(me, "roller"); } catch {}
+try { const kk = localStorage.getItem("jobsite-kind"); if (KINDS[kk] && kindOpen(kk)) setKind(me, kk); } catch {}
 // arriving from another site: rejoin the room, or carry on solo
 if (params.get("room") && /^[A-Z2-9]{4}$/.test(params.get("room"))) { elMsg.textContent = "Rejoining your crew…"; join(params.get("room")); }
 else if (params.get("solo")) begin();
 
 // hooks for automated checks
 window.__game = { SITE, world, chassis, vehicle, props, anchors, boulders, logs, stump: () => stump, tractor: () => tractor, input, me, job, L, WINCH, FARM, HUB, net, winch, heights, heightAt, mudAt, slopeAt,
-  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, openCustom, closeCustom, setLook, stepLook, get myLook() { return myLook; }, get customOpen() { return customOpen; }, applyLook, cleanLook, RIDGE, ridgeRoad, cabin: () => cabin, firewood: () => firewood, ridgeRocks, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
+  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, HAUL, FLOOD, hopper: () => hopper, gate: () => gate, cars, leveeCrest, coverOf, padCells, gravH, nextKind, blockLog: () => blockLog, blockRocks, fordRocks, picnic: () => picnic, openCustom, closeCustom, setLook, stepLook, get myLook() { return myLook; }, get customOpen() { return customOpen; }, applyLook, cleanLook, RIDGE, ridgeRoad, cabin: () => cabin, firewood: () => firewood, ridgeRocks, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
   get flags() { return flags; }, FL, parts, get target() { return target; }, get grip() { return gripNow; },
   run(steps, set = {}) { Object.assign(input, set); for (let i = 0; i < steps; i++) physicsStep(); syncVisuals(DT); target = !winch.on ? findTarget() : null; siteCheck(); },
   render() { renderer.render(scene, camera); } };
