@@ -7,9 +7,9 @@ import RAPIER from "rapier";
 await RAPIER.init();
 
 const params = new URLSearchParams(location.search);
-const SITE = ["farm", "river"].includes(params.get("site")) ? params.get("site") : "hub";
-const SEED = { hub: 20261116, farm: 20261117, river: 20261118 }[SITE];
-const TITLES = { farm: "Muddle Acres", river: "Rapid River" };
+const SITE = ["farm", "river", "ridge"].includes(params.get("site")) ? params.get("site") : "hub";
+const SEED = { hub: 20261116, farm: 20261117, river: 20261118, ridge: 20261119 }[SITE];
+const TITLES = { farm: "Muddle Acres", river: "Rapid River", ridge: "Ridge Road" };
 const DT = 1 / 60;
 const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
 const SERVER = LOCAL ? "ws://localhost:8788" : "wss://jobsite-rooms.frctop50.workers.dev";
@@ -47,7 +47,7 @@ const HUB = {
   houses: [
     { id: "farm", title: "1 · Muddle Acres", x: -36, z: -44 },
     { id: "river", title: "2 · Rapid River", x: -12, z: -44, needs: "farm" },
-    { id: "lvl3", title: "3 · Switchback Ridge", x: 12, z: -44, locked: true },
+    { id: "ridge", title: "3 · Ridge Road", x: 12, z: -44, needs: "river" },
     { id: "garage", title: "Garage", x: 46, z: -46, garage: true },
   ],
   mound: { x: 20, z: -12, r: 7, h: 3.2 },
@@ -100,6 +100,47 @@ function riverDesign(x, z) {
   return { h: h + loose, loose, mud: 2 * inSwamp };
 }
 
+// ----- level 3: Ridge Road. One road climbs a ridge in a cutting: a landslide blocks it, a gully has
+// washed it out, and the last pitch is too steep to drive. The cabin has to reach the summit.
+const RIDGE = {
+  spawn: { x: 0, z: -76, yaw: 0 },
+  cabin: { x: 11, z: -62 }, wood: { x: -12, z: -64 },
+  slide: { z: -15, len: 5.5, h: 2.3 },
+  gully: { z0: 4, z1: 10, depth: 1.9 },
+  stage: { z0: 38, z1: 46 }, pitch: { z0: 46, z1: 59 }, top: 22,
+  post: { x: 4.5, z: 64 }, pad: { x: 0, z: 78, r: 7 },
+  rocks: [[-2, -17, 1.1], [2.5, -13.5, 1.0], [0.5, -19, 1.15], [-3, -12, 1.0]],
+  trees: [[-20, -70], [22, -68], [-32, -52], [30, -50], [-14, -44], [16, -42], [-15, 66], [17, 68], [-22, 82], [24, 84], [-40, 70], [42, 72]],
+};
+function ridgeRoad(z) {
+  const R = RIDGE;
+  if (z < -30) return 0.3;
+  if (z < 0) return lerp(0.3, 6, (z + 30) / 30);
+  if (z < 18) return 6;
+  if (z < R.stage.z0) return lerp(6, 12, (z - 18) / (R.stage.z0 - 18));
+  if (z < R.pitch.z0) return 12;
+  // the climb is straight for most of its length, then rounds over onto the summit so loads don't snag on a sharp lip
+  const t = (z - R.pitch.z0) / (R.pitch.z1 - R.pitch.z0);
+  if (t < 0.8) return lerp(12, R.top, t);
+  if (t < 1.2) { const u = (t - 0.8) / 0.4; return lerp(12, R.top, 0.8 + (u - (u * u) / 2) * 0.4); }
+  return R.top;
+}
+function ridgeDesign(x, z) {
+  const R = RIDGE, ax = Math.abs(x);
+  let valley = (noise(x / 40, z / 40) - 0.5) * 2.5 + (noise(x / 12 + 3, z / 12) - 0.5) * 0.8 + 0.5;
+  const flat = (cx, cz, r, level) => { valley = lerp(valley, level, smooth(r + 10, r, Math.hypot(x - cx, z - cz))); };
+  flat(R.spawn.x, R.spawn.z, 14, 0.3); flat(R.cabin.x, R.cabin.z, 7, 0.3); flat(R.wood.x, R.wood.z, 5, 0.3);
+  valley = lerp(valley, 0.3, smooth(9, 4, ax) * smooth(-84, -76, z));                             // the road in
+  const summit = smooth(R.pitch.z1 - 1, R.pitch.z1 + 4, z);
+  const hill = ridgeRoad(z) + 7 * smooth(4.5, 11, ax) * (1 - summit) + (noise(x / 9, z / 9) - 0.5) * 1.2 * smooth(8, 14, ax);
+  let h = lerp(valley, hill, smooth(-38, -30, z));
+  h += smooth(78, 94, Math.max(ax, Math.abs(z))) * 12;
+  const G2 = R.gully;                                                                              // the washed-out gap
+  h -= G2.depth * smooth(G2.z0 - 1.5, G2.z0 + 1, z) * smooth(G2.z1 + 1.5, G2.z1 - 1, z) * smooth(10, 7, ax);
+  const S = R.slide, loose = S.h * Math.max(0, 1 - Math.abs(z - S.z) / S.len) * smooth(8.5, 6, ax);
+  return { h: h + loose, loose, mud: 0 };
+}
+
 function hubDesign(x, z) {
   let h = (noise(x / 46, z / 46) - 0.5) * 9 + (noise(x / 17 + 9, z / 17 + 4) - 0.5) * 2.6 + (noise(x / 6, z / 6) - 0.5) * 0.5;
   h += smooth(74, 94, Math.max(Math.abs(x), Math.abs(z))) * 16;                       // quarry walls
@@ -136,7 +177,7 @@ function farmDesign(x, z, noSink = false) {
 // ---------- terrain grid ----------
 const G = 384, CELL = 0.5, SIZE = G * CELL, HALF = SIZE / 2, CH = 32, NC = G / CH, W = G + 1;
 const BEDROCK = 5;                            // how far below the original ground you can dig
-const design = { hub: hubDesign, farm: farmDesign, river: riverDesign }[SITE];
+const design = { hub: hubDesign, farm: farmDesign, river: riverDesign, ridge: ridgeDesign }[SITE];
 // heights[zi + xi * W]: rows along z, columns along x, the layout Rapier's heightfield wants.
 // firm[i] is the top of undisturbed ground: anything above it is loose dirt.
 const heights = new Float32Array(W * W), base = new Float32Array(W * W), firm = new Float32Array(W * W),
@@ -206,6 +247,12 @@ function groundColor(wx, wz, hm, steep) {
     _c.copy(cDirt).lerp(cSand, smooth(0.35, 0.75, noise(wx / 23 + 40, wz / 23)));
     _c.lerp(cGrass, smooth(1.6, 3.4, hm + (noise(wx / 9, wz / 9 + 7) - 0.5) * 2));
     _c.lerp(cRock, Math.max(smooth(0.75, 1.2, steep), smooth(8, 12, hm)));
+    return;
+  }
+  if (SITE === "ridge") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    _c.lerp(cDirt, smooth(5.5, 3.8, Math.abs(wx)) * smooth(-86, -80, wz) * smooth(72, 62, wz));
+    _c.lerp(cRock, Math.max(smooth(0.75, 1.15, steep) * 0.85, smooth(-34, -28, wz) * smooth(4.5, 8, Math.abs(wx)) * smooth(60, 54, wz) * 0.35));
     return;
   }
   if (SITE === "river") {
@@ -485,7 +532,7 @@ function addCrate(x, z, sx, sy, sz, color, name, density) {
   for (const e of [1, -1]) { const band = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.08, 0.16, sz + 0.08), lam(0x22262c)); band.position.y = e * sy * 0.3; mesh.add(band); }
   const skid = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.3, 0.14, sz + 0.5), lam(0x6e5034)); skid.position.y = -sy / 2 - 0.05; skid.castShadow = true; mesh.add(skid);
   const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, heightAt(x, z) + sy / 2 + 0.3, z).setLinearDamping(0.3).setAngularDamping(1.5));
-  world.createCollider(RAPIER.ColliderDesc.cuboid(sx / 2, sy / 2 + 0.06, sz / 2).setDensity(density).setFriction(0.2), body);
+  world.createCollider(RAPIER.ColliderDesc.roundCuboid(sx / 2 - 0.25, sy / 2 + 0.06 - 0.25, sz / 2 - 0.25, 0.25).setDensity(density).setFriction(0.32).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min), body);   // crates slide on their skids: towable uphill, but they stay put on a gentle slope
   return addProp({ type: "crate", name, body, mesh, r: Math.max(sx, sz) * 0.6, x, z, damp: 0.3,
     anchorsLocal: [new THREE.Vector3(0, 0, sz / 2), new THREE.Vector3(0, 0, -sz / 2), new THREE.Vector3(sx / 2, 0, 0), new THREE.Vector3(-sx / 2, 0, 0)] });
 }
@@ -594,6 +641,25 @@ if (SITE === "river") {
   for (const [x, z, r] of R.rocks) riverRocks.push(addRock(x, z, r, "rock"));
 }
 // Crushing a rock spreads it into a patch of gravel: firm footing over mud.
+// ----- level 3: Ridge Road -----
+let cabin = null, firewood = null, padMarker = null;
+const ridgeRocks = [];
+if (SITE === "ridge") {
+  const R = RIDGE;
+  backdropTrees(130, 82, 94);
+  for (const [x, z] of R.trees) addTree(x, z, 1.1 + rng() * 0.4);
+  addPost(R.post.x, R.post.z);
+  padMarker = marker(R.pad.x, R.pad.z, R.pad.r, 0x8be28b);
+  cabin = addCrate(R.cabin.x, R.cabin.z, 3.0, 2.3, 3.6, 0xb98a52, "cabin", 54);
+  {                                               // give the cabin a roof, a door and a window
+    const roof = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 2.5, 1.3, 4, 1).rotateY(Math.PI / 4), lam(0x8f3b2e, true)); roof.scale.set(1, 1, 1.25); roof.position.y = 1.85; roof.castShadow = true; cabin.mesh.add(roof);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.5, 0.06), lam(0x5a3b22)); door.position.set(-0.6, -0.35, 1.82); cabin.mesh.add(door);
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.7, 0.06), lam(0x9fd0e8)); win.position.set(0.7, 0.15, 1.82); cabin.mesh.add(win);
+  }
+  firewood = addCrate(R.wood.x, R.wood.z, 1.5, 1.0, 1.2, 0x8a5a2b, "firewood crate", 240);
+  for (const [x, z, r] of R.rocks) ridgeRocks.push(addRock(x, z, r, "rock"));
+}
+
 function markCrushed(idx) {
   if (gravel.includes(idx)) return false;
   gravel.push(idx);
@@ -643,7 +709,7 @@ function box(mat, sx, sy, sz, x, y, z, parent) {
   m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
   return m;
 }
-const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn }[SITE];
+const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn, ridge: RIDGE.spawn }[SITE];
 const spawnAt = (slot) => {
   const off = -7.5 + slot * 5, c = Math.cos(site0.yaw), s = Math.sin(site0.yaw);
   return { x: site0.x + off * c, z: site0.z - off * s, yaw: site0.yaw };
@@ -724,7 +790,7 @@ function disposeLoader(ld) { world.removeRigidBody(ld.body); scene.remove(ld.gro
 const me = makeLoader(0, true);
 const chassis = me.body;
 // Places to change vehicle: the garage in the quarry, and a vehicle yard near the start of each job.
-const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 } }[SITE] || null;
+const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 } }[SITE] || null;
 function parkDisplay(kind, slot, x, z, yaw) {
   const d = makeLoader(slot, false);
   setKind(d, kind);
@@ -860,6 +926,8 @@ const _bp = new THREE.Vector3();
 function digStep() {
   const P = _bp.setFromMatrixPosition(_bw);
   let cut = 0, cutFirm = 0, cutG = 0;
+  // firm ground only gives way to a moving blade or a bucket being pushed down: a stalled loader doesn't sink a pit
+  const bite = Math.max(clamp(Math.abs(me.speed) / 1.2, 0, 1), input.arm < 0 ? 1 : 0);
   if (me.tilt > -0.1 && _up.y > 0.35 && P.y - heightAt(P.x, P.z) < 3) {      // a bucket tipped to dump doesn't cut
     let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
     for (const [lx, lz] of [[-1.5, -0.15], [1.5, -0.15], [-1.5, 1.4], [1.5, 1.4]]) {
@@ -877,7 +945,7 @@ function digStep() {
       if (over <= 0.02) continue;
       // loose dirt scoops up fast; firm ground is shaved a little at a time, so the bucket can't bury itself
       const soft = Math.min(over, Math.max(0, heights[i] - firm[i]), L.looseRate * DT);
-      const hard = heights[i] - soft - firm[i] < 1e-3 ? Math.min(over - soft, L.firmRate * DT) : 0;
+      const hard = heights[i] - soft - firm[i] < 1e-3 ? Math.min(over - soft, L.firmRate * bite * DT) : 0;
       cut -= addHeight(xi, zi, -(soft + hard)) * CELL * CELL; cutG += lastG * CELL * CELL; cutFirm += hard * CELL * CELL; touch(xi, zi);
     }
   }
@@ -934,7 +1002,7 @@ function switchPad() {
   if (SITE === "hub") { const gh = houses.find((h) => h.garage); return gh && gh.b.inside(t.x, t.z) ? "garage" : null; }
   return YARD && Math.hypot(t.x - YARD.x, t.z - YARD.z) < YARD.r ? "vehicle yard" : null;
 }
-const rollerUnlocked = () => SITE === "river" || !!(progress.farm && progress.farm.done);
+const rollerUnlocked = () => SITE === "river" || SITE === "ridge" || !!(progress.farm && progress.farm.done);
 function switchVehicle() {
   if (!switchPad() || Math.abs(me.speed) > 2) return;
   const next = me.kind === "loader" ? "roller" : "loader";
@@ -1100,9 +1168,12 @@ const job = { time: 0, fill: 0, logsIn: 0, bouldersIn: 0, stumpPull: 0, stuck: 0
 function sinkDeficit() { let d = 0; for (let k = 0; k < sinkIdx.length; k++) d += Math.max(0, sinkTarget[k] - heights[sinkIdx[k]]); return d * CELL * CELL; }
 const SINK_START = SITE === "farm" ? sinkDeficit() : 1;
 function setFlag(f) { if (flags & f) return; flags |= f; onFlag(f); }
+const RIDGE_BANNER = { 2: "<b>Landslide cleared!</b>The road is open as far as the gully.", 4: "<b>Gully filled!</b>You can tow the cabin up to the last climb.",
+  1: "<b>Firewood delivered!</b>Bonus job done.", 64: "<b>Every rock crushed!</b>Bonus job done." };
 function onFlag(f) {
+  if (SITE === "ridge" && RIDGE_BANNER[f]) showBanner(RIDGE_BANNER[f], 5000);
   if (f === FL.stump && stump) { stump.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true); showBanner("<b>Stump pulled!</b>Bonus job done.", 4000); }
-  if (f === FL.tractor) showBanner(SITE === "river" ? "<b>Every rock crushed!</b>Bonus job done." : "<b>Tractor rescued!</b>Bonus job done.", 4000);
+  if (f === FL.tractor && SITE !== "ridge") showBanner(SITE === "river" ? "<b>Every rock crushed!</b>Bonus job done." : "<b>Tractor rescued!</b>Bonus job done.", 4000);
   if (SITE === "river" && f === FL.logs) showBanner("<b>Causeway built!</b>You can drive across the river now.", 5000);
   if (SITE === "river" && f === FL.boulders) showBanner("<b>Gravel road laid!</b>Go and fetch the generator.", 5000);
   if (f === FL.stump && SITE === "river") showBanner("<b>Toolbox recovered!</b>Bonus job done.", 4000);
@@ -1621,8 +1692,73 @@ function checkRiver() {
   }
   setHint(h);
 }
-const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep() }[SITE];
-const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver() }[SITE];
+// ----- Ridge Road rules -----
+function ridgeStep() {
+  const R = RIDGE, t = chassis.translation();
+  // holding the bucket down on a rock crushes it into gravel here too
+  let hit = -1;
+  if (me.kind === "loader" && input.arm < 0 && me.tilt > -0.3) {
+    for (const k of ridgeRocks) {
+      if (!k.active || !mineP(k)) continue;
+      const p = k.body.translation();
+      _rp.set(p.x, p.y, p.z).applyMatrix4(_bi);
+      if (Math.abs(_rp.x) < 1.5 && _rp.z > -0.4 && _rp.z < 1.7 && _rp.y < 0.1 && _rp.y > -(k.r * 1.6 + 0.5)) { hit = k.index; break; }
+    }
+  }
+  if (hit >= 0 && hit === smash.i) {
+    if ((smash.t += DT) > 0.4) { const k = props[hit], p = k.body.translation(); layGravel(hit, p.x, p.z, k.r); smash.t = 0; smash.i = -1; }
+  } else { smash.i = hit; smash.t = 0; }
+  if (!job.moved && Math.hypot(t.x - R.spawn.x, t.z - R.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function checkRidge() {
+  const R = RIDGE, at = (p, o) => { const t = p.body.translation(); return Math.hypot(t.x - o.x, t.z - o.z) < o.r && t.y > R.top - 1; };
+  job.fill = crossable(R.slide.z - R.slide.len + 1, R.slide.z + R.slide.len - 1, 6, (x, z) => heightAt(x, z) < ridgeRoad(z) + 0.45);
+  if (job.fill >= 1) setFlag(FL.logs);
+  job.road = crossable(R.gully.z0, R.gully.z1, 6, (x, z) => heightAt(x, z) > ridgeRoad(z) - 0.55);
+  if (job.road >= 1) setFlag(FL.boulders);
+  const cp = cabin.body.translation(), atStage = cp.z > R.stage.z0 - 3 && cp.y > 11;
+  if (atStage) setFlag(FL.fill);
+  if (at(cabin, R.pad)) setFlag(FL.done);
+  if (at(firewood, R.pad)) setFlag(FL.stump);
+  const crushed = ridgeRocks.filter((k) => !k.active).length;
+  if (crushed >= ridgeRocks.length) setFlag(FL.tractor);
+  const cleared = !!(flags & FL.logs), filled = !!(flags & FL.boulders), staged = !!(flags & FL.fill);
+  padMarker.beam.visible = staged;
+  elTasks.innerHTML = `<h2>Ridge Road</h2>
+    ${row(cleared, `Clear a way through the landslide: ${cleared ? 100 : Math.floor(job.fill * 100)}%`)}
+    ${row(filled, `Fill the washed-out gully: ${filled ? 100 : Math.floor(job.road * 100)}%`)}
+    ${row(staged, "Tow the cabin up to the foot of the last climb", cleared && filled ? "" : "sub")}
+    ${row(flags & FL.done, "Winch the cabin up to the summit pad", staged ? "" : "sub")}
+    <div class="sub" style="margin-top:6px">Bonus</div>
+    ${row(flags & FL.stump, "Bring the firewood crate to the summit too", "sub")}
+    ${row(flags & FL.tractor, `Crush the landslide rocks: ${crushed} / ${ridgeRocks.length}`, "sub")}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  const t = chassis.translation(), onTop = t.y > R.top - 1.2 && t.z > R.pitch.z1 - 1, towing = winch.on && winch.kind === 1 && winch.ref === cabin.index;
+  let h = "";
+  if (!job.moved) h = "The cabin has to go to the top of the ridge. The only road up is blocked: drive north and take a look.";
+  else if (!cleared) h = me.load > 3
+    ? `Carry the dirt up the road and tip it ${K("&rarr;")} into the washed-out gully further on. The landslide is exactly the fill you need.`
+    : `A landslide blocks the road. Dig a way through: lower the bucket ${K("&darr;")} and drive into it. Push the rocks aside, or crush them.`;
+  else if (!filled) h = me.load > 0.5
+    ? `Tip the load ${K("&rarr;")} into the gully. Keep filling until a strip of road reaches the far side.`
+    : "The road is washed out ahead. Fill the gully with what is left of the landslide: scoop a bucketful, carry it up and tip it in.";
+  else if (!staged) h = towing
+    ? "Tow the cabin up the road, over your fill, to the flat spot at the foot of the last steep climb."
+    : `Road open! Go back for the cabin near the start: turn your back to it, hook it with ${K("E")} and tow it up the road.`;
+  else if (!(flags & FL.done)) {
+    if (cp.y > R.top - 1) h = `Tow the cabin onto the <b class="g">summit pad</b> (green ring) to finish.`;
+    else if (!onTop && towing) h = `The last climb is too steep to drive, let alone tow. Unhook the cabin with ${K("E")} and leave it here for now.`;
+    else if (!onTop && winch.on) h = `Hold ${K("Q")} to winch yourself up the climb.`;
+    else if (!onTop) h = `Back up to the steep climb, hook the <b>winch post</b> at the top with ${K("E")} and hold ${K("Q")} to pull yourself up. The cabin comes after you.`;
+    else if (towing) h = `Hold ${K("Space")} to dig your tyres in and reel the cabin up with ${K("Q")}. Then tow it to the green ring.`;
+    else h = `Now pull the cabin up from above: unhook from the post, turn your back to the drop, hook the cabin with ${K("E")}, hold ${K("Space")} and reel it in with ${K("Q")}.`;
+  }
+  setHint(h);
+}
+const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep(), ridge: () => ridgeStep() }[SITE];
+const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver(), ridge: () => checkRidge() }[SITE];
 function checkHub() {
   const rows = houses.map((hs) => {
     const p = progress[hs.id];
@@ -1812,7 +1948,7 @@ else if (params.get("solo")) begin();
 
 // hooks for automated checks
 window.__game = { SITE, world, chassis, vehicle, props, anchors, boulders, logs, stump: () => stump, tractor: () => tractor, input, me, job, L, WINCH, FARM, HUB, net, winch, heights, heightAt, mudAt, slopeAt,
-  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
+  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, RIDGE, ridgeRoad, cabin: () => cabin, firewood: () => firewood, ridgeRocks, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
   get flags() { return flags; }, FL, parts, get target() { return target; }, get grip() { return gripNow; },
   run(steps, set = {}) { Object.assign(input, set); for (let i = 0; i < steps; i++) physicsStep(); syncVisuals(DT); target = !winch.on ? findTarget() : null; siteCheck(); },
   render() { renderer.render(scene, camera); } };
