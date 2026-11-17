@@ -1,6 +1,33 @@
 // What people say, per level and event. Each entry is a list of [character id, line].
 // Events: start (the level begins), done (the level is finished), and one per objective id.
 export const LINES = {
+  fire: {
+    start: [
+      ["lou", "Rancher Linston. There's a grass fire up the valley, and the wind's bringing it straight for my farm."],
+      ["lou", "Fire won't cross bare dirt. Scrape me a wide strip of it across the valley before it gets here. Quick as you can."],
+    ],
+    fire: [["lou", "There it is. Hold the line!"]],
+    wind: [["lou", "Wind's shifted! It's going for the east side!"]],
+    done: [["lou", "Not a blade of my grass burnt. The cows are throwing a party. Look at them!"]],
+    doneSome: [["lou", "It's out. Lost a bit of pasture, but the house and the herd are fine. Thank you."]],
+  },
+  night: {
+    start: [
+      ["bea", "Grade-A Grading parked a mountain of premium topsoil in their yard. We need thirty cubes of it. Tonight."],
+      ["bea", "Their guard drives the same loop every night. Same cone of light. Learn it, and you're invisible."],
+    ],
+    in: [["bea", "You're in. Mind the floodlights, they sweep on a timer."]],
+    lights: [["bea", "Lights out! Now only the guard can see you."]],
+    done: [["bea", "Thirty cubes of the finest topsoil in the valley. Grade-A will never know. Probably."]],
+  },
+  sands: {
+    start: [
+      ["gus", "Howdy. Old Ginston. Need that pit filled in, it's a menace. Sand from the dunes'll do."],
+      ["gus", "Oh, and, er. Never mind. You'll be fine. Probably."],
+    ],
+    fill: [["gus", "You found the worm, then. Forgot to mention him. He's harmless! Mostly. Roll it flat and he's sealed in."]],
+    done: [["gus", "Sealed! He'll sulk for a week. Here, have some gold dust. It's mostly sand."]],
+  },
   treasure: {
     start: [
       ["hinston", "Arr! Captain Hinston. Me granddad's treasure map got soaked in the storm. All that's left is clues."],

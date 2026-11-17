@@ -11,10 +11,10 @@ const [{ createPopups }, { createObjectives, when }, CFG, { CHARACTERS }, { LINE
   ["./sys/popups.js", "./sys/objectives.js", "./data/config.js", "./data/characters.js", "./data/lines.js", "./sys/sound.js"].map((f) => import(f + V)));
 
 const params = new URLSearchParams(location.search);
-const SITE = ["farm", "river", "ridge", "haul", "flood", "treasure", "airstrip"].includes(params.get("site")) ? params.get("site") : "hub";
-const SEED = { hub: 20261116, farm: 20261117, river: 20261118, ridge: 20261119, haul: 20261120, flood: 20261121, treasure: 20261122, airstrip: 20261123 }[SITE];
-const TITLES = { farm: "Muddle Acres", river: "Rapid River", ridge: "Ridge Road", haul: "Gravel Run", flood: "Flood Season", treasure: "X Marks the Spot", airstrip: "No Questions Asked" };
-const LEVEL_NUM = { farm: 1, river: 2, ridge: 3, haul: 4, flood: 5, treasure: 6, airstrip: 7 };
+const SITE = ["farm", "river", "ridge", "haul", "flood", "treasure", "airstrip", "sands", "night", "fire"].includes(params.get("site")) ? params.get("site") : "hub";
+const SEED = { hub: 20261116, farm: 20261117, river: 20261118, ridge: 20261119, haul: 20261120, flood: 20261121, treasure: 20261122, airstrip: 20261123, sands: 20261124, night: 20261125, fire: 20261126 }[SITE];
+const TITLES = { farm: "Muddle Acres", river: "Rapid River", ridge: "Ridge Road", haul: "Gravel Run", flood: "Flood Season", treasure: "X Marks the Spot", airstrip: "No Questions Asked", sands: "Sinking Sands", night: "Night Shift", fire: "Firebreak" };
+const LEVEL_NUM = { farm: 1, river: 2, ridge: 3, haul: 4, flood: 5, treasure: 6, airstrip: 7, sands: 8, night: 9, fire: 10 };
 const DT = 1 / 60;
 const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
 const SERVER = LOCAL ? "ws://localhost:8788" : "wss://jobsite-rooms.frctop50.workers.dev";
@@ -57,6 +57,9 @@ const HUB = {
     { id: "flood", title: "5 · Flood Season", x: -62, z: -18, needs: "haul" },
     { id: "treasure", title: "6 · X Marks the Spot", x: -62, z: 8, needs: "flood" },
     { id: "airstrip", title: "7 · No Questions Asked", x: 62, z: 8, needs: "flood" },
+    { id: "sands", title: "8 · Sinking Sands", x: 62, z: -18, needs: "flood" },
+    { id: "night", title: "9 · Night Shift", x: 62, z: 34, needs: "flood" },
+    { id: "fire", title: "10 · Firebreak", x: 36, z: 48, needs: "flood" },
     { id: "garage", title: "Garage", x: 46, z: -46, garage: true },
     { id: "paint", title: "Paint Shop", x: 69, z: -46, paint: true },
   ],
@@ -341,6 +344,79 @@ function airDesign(x, z) {
   return { h: h + grav, loose: grav, mud, grav };
 }
 
+// ----- level 8: Sinking Sands. Fill a desert pit (sand slumps flat; mixing in gravel holds it steeper),
+// then roll it to seal it. Something lives in the pit: on a fixed beat it strikes everything inside its ring.
+const SANDS = {
+  spawn: { x: 0, z: -72, yaw: 0 },
+  pit: { x: 0, z: 8, r: 15, depth: 4.2, level: 0.4 },
+  ring: { start: 24, end: 11 },                       // the worm's reach shrinks as the pit fills
+  strike: { every: 26, everyEnd: 15, warn: 3.5, grace: 50 },
+  dunes: [{ x: -42, z: -20, r: 14, h: 5 }, { x: 44, z: -16, r: 13, h: 5 }, { x: -40, z: 44, r: 12, h: 4.5 }, { x: 42, z: 46, r: 12, h: 4.5 }, { x: 0, z: -40, r: 10, h: 3.5 }],
+  rocks: [[-24, -48, 1.0], [24, -46, 1.05], [-58, 12, 1.0], [58, 10, 0.95], [-14, 52, 1.0], [16, 56, 1.05]],
+  yards: [{ x: 20, z: -72, r: 5.5 }],
+};
+function sandsDesign(x, z) {
+  const S = SANDS, P = S.pit;
+  let h = (noise(x / 30, z / 30) - 0.5) * 2.4 + (noise(x / 9 + 3, z / 9) - 0.5) * 0.6 + P.level;
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  h = lerp(h, P.level, smooth(16, 8, Math.hypot(x - S.spawn.x, z - S.spawn.z)));
+  const d = Math.hypot(x - P.x, z - P.z);
+  h = lerp(h, P.level, smooth(P.r + 12, P.r + 2, d));
+  h -= P.depth * smooth(P.r, P.r * 0.3, d);                                       // the pit
+  let loose = 0.8 * smooth(P.r + 6, P.r, d) * smooth(P.r * 0.5, P.r * 0.9, d);    // its rim is loose sand: it keeps slumping in
+  for (const D of S.dunes) loose += D.h * Math.max(0, 1 - (Math.hypot(x - D.x, z - D.z) / D.r) ** 1.4);
+  return { h: h + loose, loose, mud: 0 };
+}
+
+// ----- level 9: Night Shift. Borrow 30 m³ of premium topsoil from Grade-A Grading's yard across the road,
+// at night. A guard truck drives one fixed loop with a vision cone; two floodlights sweep fixed arcs.
+const NIGHT = {
+  spawn: { x: 0, z: -72, yaw: 0 },
+  road: { z: -10, half: 5 },
+  yard: { x0: -32, x1: 32, z0: 10, z1: 56 }, gate: { x: 0, w: 8 },
+  pile: { x: 0, z: 40, r: 11, h: 4.5 },
+  lot: { x: 0, z: -48, r: 9 },
+  guard: { path: [[-25, 17], [25, 17], [25, 49], [-25, 49]], speed: 4, pause: 3, len: 16, half: 0.42 },
+  lights: [{ x: -36, z: 60, aim: -0.75, amp: 0.55, period: 12, len: 30, half: 0.24 }, { x: 36, z: 6, aim: 2.4, amp: 0.55, period: 15, len: 30, half: 0.24 }],
+  generator: { x: 39, z: 32 },
+  need: 30,
+  yards: [{ x: 22, z: -72, r: 5.5 }],
+};
+function nightDesign(x, z) {
+  const N = NIGHT, Y = N.yard;
+  let h = (noise(x / 40, z / 40) - 0.5) * 2 + (noise(x / 12 + 3, z / 12) - 0.5) * 0.5 + 0.4;
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  h = lerp(h, 0.3, smooth(N.road.half + 4, N.road.half, Math.abs(z - N.road.z)));
+  const inY = Math.min(x - Y.x0, Y.x1 - x, z - Y.z0, Y.z1 - z);
+  h = lerp(h, 0.3, smooth(-8, 0, inY));
+  h = lerp(h, 0.3, smooth(N.lot.r + 8, N.lot.r, Math.hypot(x - N.lot.x, z - N.lot.z)));
+  h = lerp(h, 0.3, smooth(12, 4, Math.hypot(x - N.spawn.x, z - N.spawn.z - 6)));
+  const P = N.pile, loose = P.h * Math.max(0, 1 - (Math.hypot(x - P.x, z - P.z) / P.r) ** 1.5);
+  return { h: h + loose, loose, mud: 0 };
+}
+
+// ----- level 10: Firebreak. A grass fire comes down the valley at dusk; cut bare-dirt breaks to keep it off
+// Rancher Linston's farm. The fire is a coarse grid (2 m cells) run by the host's game.
+const FIRE = {
+  spawn: { x: 0, z: -66, yaw: 0 },
+  farm: { x0: -42, x1: 42, z0: -84, z1: -34 },
+  line: { z: -16 },                                     // the suggested firebreak
+  ignite: { z: 72, at: 150 },                           // where the fire starts, and when (seconds)
+  windShift: 200,                                       // seconds after it starts, the wind swings south-east
+  trees: [[-50, 6], [-28, 18], [-6, 28], [18, 10], [40, 22], [58, 4], [-60, 34], [30, 44], [-36, -4], [8, -4]],
+  cows: [[-20, -60], [-12, -54], [14, -62], [22, -56], [-28, -70], [6, -72]],
+  yards: [{ x: 24, z: -70, r: 5.5 }],
+};
+function fireDesign(x, z) {
+  const F = FIRE;
+  let h = (noise(x / 38, z / 38) - 0.5) * 2.2 + (noise(x / 11 + 3, z / 11) - 0.5) * 0.6 + 0.4;
+  h += 6 * smooth(-20, 80, z);                                                   // the valley slopes up to the north: the fire comes downhill
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  const Fm = F.farm, inF = Math.min(x - Fm.x0, Fm.x1 - x, z - Fm.z0, Fm.z1 - z);
+  h = lerp(h, 0.3, smooth(-10, 2, inF));
+  return { h, loose: 0, mud: 0 };
+}
+
 function hubDesign(x, z) {
   let h = (noise(x / 46, z / 46) - 0.5) * 9 + (noise(x / 17 + 9, z / 17 + 4) - 0.5) * 2.6 + (noise(x / 6, z / 6) - 0.5) * 0.5;
   h += smooth(74, 94, Math.max(Math.abs(x), Math.abs(z))) * 16;                       // quarry walls
@@ -384,7 +460,7 @@ function farmDesign(x, z, noSink = false) {
 // ---------- terrain grid ----------
 const G = 384, CELL = 0.5, SIZE = G * CELL, HALF = SIZE / 2, CH = 32, NC = G / CH, W = G + 1;
 const BEDROCK = 5;                            // how far below the original ground you can dig
-const design = { hub: hubDesign, farm: farmDesign, river: riverDesign, ridge: ridgeDesign, haul: haulDesign, flood: floodDesign, treasure: treasureDesign, airstrip: airDesign }[SITE];
+const design = { hub: hubDesign, farm: farmDesign, river: riverDesign, ridge: ridgeDesign, haul: haulDesign, flood: floodDesign, treasure: treasureDesign, airstrip: airDesign, sands: sandsDesign, night: nightDesign, fire: fireDesign }[SITE];
 // heights[zi + xi * W]: rows along z, columns along x, the layout Rapier's heightfield wants.
 // firm[i] is the top of undisturbed ground: anything above it is loose dirt.
 const heights = new Float32Array(W * W), base = new Float32Array(W * W), firm = new Float32Array(W * W),
@@ -392,6 +468,7 @@ const heights = new Float32Array(W * W), base = new Float32Array(W * W), firm = 
 // pack[i]: how firmly packed the top is, 0 = freshly dumped, 1 = rolled flat or never disturbed
 const pack = new Float32Array(W * W), pack0 = new Uint8Array(W * W);
 const sinkIdx = [], sinkTarget = [];
+const idxAt = (x, z) => Math.round((z + HALF) / CELL) + Math.round((x + HALF) / CELL) * W;
 // Cut/fill zones (Ridge Road): dirt dug out of the cut zone versus dirt placed in the fill zone.
 const cutIdx = [], fillIdx = [], roadFillIdx = [];
 for (let xi = 0; xi <= G; xi++) for (let zi = 0; zi <= G; zi++) {
@@ -466,10 +543,28 @@ function groundColor(wx, wz, hm, steep) {
     _c.lerp(cRock, Math.max(smooth(0.75, 1.2, steep), smooth(8, 12, hm)));
     return;
   }
+  if (SITE === "fire") {
+    _c.copy(cGrass).lerp(new THREE.Color(0xb8b05a), 0.35 + noise(wx / 13 + 5, wz / 13) * 0.3);     // dry late-summer grass
+    _c.lerp(cRock, smooth(0.9, 1.3, steep) * 0.6);
+    return;
+  }
+  if (SITE === "night") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    const P = NIGHT.pile, Y = NIGHT.yard;
+    _c.lerp(cDirt, smooth(1, -1, Math.min(wx - Y.x0, Y.x1 - wx, wz - Y.z0, Y.z1 - wz)) * 0.6);
+    _c.lerp(cMud, smooth(P.r + 1, P.r - 3, Math.hypot(wx - P.x, wz - P.z)) * 0.7);          // dark, rich topsoil
+    return;
+  }
+  if (SITE === "sands") {
+    _c.copy(cSand).lerp(cDirt, noise(wx / 17 + 5, wz / 17) * 0.35);
+    _c.lerp(cRock, smooth(0.9, 1.3, steep) * 0.5);
+    return;
+  }
   if (SITE === "treasure") {
     _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
     _c.lerp(cSand, Math.max(smooth(-0.1, -0.6, hm), smooth(11, 7, Math.abs(wz - TREASURE.ford.z)) * 0.6, smooth(10, 6.5, Math.abs(wz - TREASURE.deep.z)) * 0.7));
     _c.lerp(cDirt, smooth(9, 5, Math.hypot(wx - TREASURE.home.x, wz - TREASURE.home.z)) * 0.7);
+    for (const S of TREASURE.spoil) _c.lerp(cLoose, smooth(S.r, S.r - 3, Math.hypot(wx - S.x, wz - S.z)) * 0.8);     // the spoil heaps you build the causeway from
     _c.lerp(cRock, smooth(0.9, 1.3, steep) * 0.7);
     return;
   }
@@ -551,7 +646,8 @@ function buildMesh(c) {
     groundColor(wx, wz, (ha + hb + hc) / 3, (Math.max(ha, hb, hc) - Math.min(ha, hb, hc)) / CELL);
     const l = loose[ia] + loose[ib] + loose[ic], gq = (gravH[ia] + gravH[ib] + gravH[ic]) / 3;
     const m = ((mudA[ia] + mudA[ib] + mudA[ic]) / 3) * (1 - smooth(0.03, 0.12, gq));
-    if (l) _c.lerp(cLoose, 0.3 * l);
+    // loose dirt shows brown, except the treasure hunt's untouched mounds (they'd give the clues away)
+    if (l && !(SITE === "treasure" && Math.abs(ha - base[ia]) + Math.abs(hb - base[ib]) + Math.abs(hc - base[ic]) < 0.06)) _c.lerp(cLoose, 0.3 * l);
     if (m > 0.05) _c.lerp(cMud, Math.min(1, m) * 0.85);
     if (gq > 0.008) _c.lerp(cGravel, Math.min(1, gq / 0.06));
     _c.multiplyScalar(0.93 + hash2(ax * 3 + bx, az * 5 + cz) * 0.14);
@@ -623,7 +719,7 @@ function touch(xi, zi) {
   active.ttl = 50;
 }
 // how steep loose dirt can stand: dirt tipped into the river spreads out flat, so a causeway ends up wide enough to drive on
-function looseSlope(i) { return SITE === "river" && Math.abs((i % W) * CELL - HALF - RIVER.mid) < 11 && heights[i] < 0.9 ? 0.36 : 0.62; }
+function looseSlope(i) { if (SITE === "sands") return gravH[i] > 0.05 ? 0.62 : 0.38; return SITE === "river" && Math.abs((i % W) * CELL - HALF - RIVER.mid) < 11 && heights[i] < 0.9 ? 0.36 : 0.62; }
 function relaxStep() {
   if (!active.on) return;
   if (--active.ttl <= 0) { active.on = false; return; }
@@ -1364,6 +1460,152 @@ if (SITE === "airstrip") {
   for (const [x, z, r] of A.rocks) stripRocks.push(addRock(x, z, r, "rock"));
 }
 
+// ----- level 8: Sinking Sands -----
+let wormRing = null, wormMouth = null, wormRipples = null;
+const pitCells = [], pitTarget = [], sandRocks = [];
+if (SITE === "sands") {
+  const S = SANDS, P = S.pit;
+  scene.background.set(0xe8d9b5); scene.fog.color.set(0xe8d9b5);
+  for (let x = P.x - P.r; x <= P.x + P.r; x += CELL) for (let z = P.z - P.r; z <= P.z + P.r; z += CELL)
+    if (Math.hypot(x - P.x, z - P.z) < P.r - 0.5) { const i = idxAt(x, z); pitCells.push(i); pitTarget.push(P.level); }
+  // the worm's ring, drawn on the sand; ripples run inward before it strikes; its mouth erupts when it does
+  wormRing = new THREE.Mesh(new THREE.RingGeometry(0.97, 1, 72), new THREE.MeshBasicMaterial({ color: 0xd8333a, transparent: true, opacity: 0.8, side: THREE.DoubleSide }));
+  wormRing.rotation.x = -Math.PI / 2; wormRing.position.set(P.x, P.level + 0.3, P.z); scene.add(wormRing);
+  wormRipples = new THREE.Group(); scene.add(wormRipples);
+  for (let k = 0; k < 3; k++) { const r = new THREE.Mesh(new THREE.RingGeometry(0.94, 1, 64), new THREE.MeshBasicMaterial({ color: 0xffd08a, transparent: true, opacity: 0.6, side: THREE.DoubleSide })); r.rotation.x = -Math.PI / 2; wormRipples.add(r); }
+  wormRipples.visible = false;
+  wormMouth = new THREE.Group(); scene.add(wormMouth); wormMouth.visible = false;
+  { const flesh = lam(0xc98a6a), inner = lam(0x5a1f2a);
+    const tube = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 5, 9, 18, 1, true), flesh); tube.material.side = THREE.DoubleSide; tube.position.y = 4.5; wormMouth.add(tube);
+    const throat = new THREE.Mesh(new THREE.CircleGeometry(4.1, 18), inner); throat.rotation.x = -Math.PI / 2; throat.position.y = 7; wormMouth.add(throat);
+    for (let k = 0; k < 14; k++) { const a = (k / 14) * Math.PI * 2, tooth = new THREE.Mesh(new THREE.ConeGeometry(0.4, 1.4, 5), lam(0xf4f1ea)); tooth.position.set(Math.cos(a) * 3.8, 9.2, Math.sin(a) * 3.8); tooth.rotation.set(Math.sin(a) * 0.6, 0, -Math.cos(a) * 0.6); wormMouth.add(tooth); }
+  }
+  // a prospector's shack and sign, for colour
+  { const b = building({ x: -14, z: -64, w: 7, d: 6, h: 3.4, door: 2.4, dh: 2.3, face: 1, wall: 0xb9935e, roof: 0x7a5a3a }); b.sign.userData.draw("Old Ginston", "Prospector (retired)", "#e8b06a"); }
+  for (const [x, z, r] of S.rocks) sandRocks.push(addRock(x, z, r, "rock"));
+}
+
+// ----- night: a dark sky, a dim moon, and headlights on every vehicle (L toggles yours) -----
+const IS_NIGHT = SITE === "night";
+function applyNight() {
+  const hemi = scene.children.find((o) => o.isHemisphereLight);
+  scene.background.set(0x0b1424); scene.fog.color.set(0x0b1424); scene.fog.near = 25; scene.fog.far = 150;
+  if (hemi) { hemi.intensity = 0.32; hemi.color.set(0x6f86b8); hemi.groundColor.set(0x1d2230); }
+  sun.intensity = 0.35; sun.color.set(0x9fb2e0);
+}
+if (IS_NIGHT) applyNight();
+// a flat fan on the ground, pointing along +z: used for vision cones and floodlight beams
+function coneFan(len, half, color, opacity) {
+  const n = 18, pos = [0, 0, 0];
+  for (let k = 0; k <= n; k++) { const a = -half + (2 * half * k) / n; pos.push(Math.sin(a) * len, 0, Math.cos(a) * len); }
+  const idx = []; for (let k = 1; k <= n; k++) idx.push(0, k, k + 1);
+  const geo = new THREE.BufferGeometry(); geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3)); geo.setIndex(idx);
+  const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false }));
+  scene.add(m); return m;
+}
+// is (x, z) inside a cone from (ax, az) facing yaw (0 = +z), len long, half wide?
+function inCone(x, z, ax, az, yaw, len, half) {
+  const dx = x - ax, dz = z - az, d = Math.hypot(dx, dz);
+  if (d > len || d < 0.1) return false;
+  let a = Math.atan2(dx, dz) - yaw; a = Math.atan2(Math.sin(a), Math.cos(a));
+  return Math.abs(a) < half;
+}
+
+// ----- level 9: Night Shift -----
+const panels = [];
+let guardTruck = null, guardCone = null, guardLight = null, floodCones = [], floodLights = [], generator = null, lotMarker = null, alarmTint = null;
+if (SITE === "night") {
+  const N = NIGHT, Y = N.yard;
+  backdropTrees(130, 82, 94);
+  // the road, with a few lamp posts
+  { const road = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, N.road.half * 2), lam(0x3a3f46)); road.rotation.x = -Math.PI / 2; road.position.set(0, 0.33, N.road.z); road.receiveShadow = true; scene.add(road); }
+  for (const x of [-60, -20, 20, 60]) {
+    const p = new THREE.Mesh(new THREE.BoxGeometry(0.2, 5, 0.2), lam(0x565c66)); p.position.set(x, 2.8, N.road.z - N.road.half - 1); scene.add(p);
+    const l = new THREE.PointLight(0xffd9a0, 18, 22, 1.5); l.position.set(x, 5.2, N.road.z - N.road.half - 1); scene.add(l);
+  }
+  lotMarker = marker(N.lot.x, N.lot.z, N.lot.r, 0x8be28b);
+  { const s = makeSign(4.4, 1.1); s.userData.draw("Grade-A Grading", "Private. Keep out.", "#ff6a5a"); s.position.set(N.gate.x, 3.2, Y.z0 - 0.4); s.rotation.y = Math.PI; scene.add(s); }
+  { const s = makeSign(3.6, 0.9); s.userData.draw("Your lot", "Drop the topsoil here"); s.position.set(N.lot.x, 2.2, N.lot.z - N.lot.r - 0.5); s.rotation.y = Math.PI; scene.add(s); }
+  // the fence: 4 m panels you can dig under (quiet) or winch down (loud); the gate is a locked panel pair
+  const panelMat = lam(0x8a9099), postMat = lam(0x5a6068);
+  const addPanel = (x0, z0, x1, z1, gate) => {
+    const len = Math.hypot(x1 - x0, z1 - z0), cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, yaw = Math.atan2(x1 - x0, z1 - z0) + Math.PI / 2, y = heightAt(cx, cz);
+    const mesh = new THREE.Group(); scene.add(mesh);
+    const mesh2 = new THREE.Mesh(new THREE.BoxGeometry(len - 0.1, 2.4, 0.08), gate ? lam(0xb8462e) : panelMat); mesh2.position.y = 1.2; mesh2.castShadow = true; mesh.add(mesh2);
+    for (const e of [-1, 1]) { const p = new THREE.Mesh(new THREE.BoxGeometry(0.14, 2.6, 0.14), postMat); p.position.set((e * len) / 2, 1.3, 0); mesh.add(p); }
+    const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(cx, y, cz).setRotation(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw)));
+    world.createCollider(RAPIER.ColliderDesc.cuboid(len / 2, 1.2, 0.1).setTranslation(0, 1.2, 0), body);
+    panels.push(addProp({ type: "panel", name: gate ? "locked gate" : "fence panel", body, mesh, r: len / 2, x: cx, z: cz, damp: 0, anchorsLocal: [new THREE.Vector3(0, 1.2, 0)], yaw, pullT: 0 }));
+  };
+  for (let x = Y.x0; x < Y.x1; x += 4) {
+    addPanel(x, Y.z1, x + 4, Y.z1);
+    const mid = x + 2;
+    addPanel(x, Y.z0, x + 4, Y.z0, Math.abs(mid - N.gate.x) < N.gate.w / 2);
+  }
+  for (let z = Y.z0; z < Y.z1; z += 4) { addPanel(Y.x0, z, Y.x0, Math.min(z + 4, Y.z1)); addPanel(Y.x1, z, Y.x1, Math.min(z + 4, Y.z1)); }
+  // a couple of dim lamps in the yard so you can see the pile
+  for (const [x, z] of [[-14, 30], [14, 30]]) { const l = new THREE.PointLight(0xffe2b0, 10, 20, 1.5); l.position.set(x, 4, z); scene.add(l); }
+  // the guard truck (it drives its loop; that is all it does)
+  guardTruck = new THREE.Group(); scene.add(guardTruck);
+  { const white = lam(0xe8e8e8), dk = lam(0x22262c);
+    const part = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; guardTruck.add(m); return m; };
+    part(new THREE.BoxGeometry(2, 0.8, 4.6), white, 0, 0.8, 0); part(new THREE.BoxGeometry(1.9, 0.8, 1.8), lam(0x9fd0e8), 0, 1.55, 0.4);
+    for (const sx of [-0.95, 0.95]) for (const sz of [-1.5, 1.5]) part(new THREE.CylinderGeometry(0.4, 0.4, 0.3, 10).rotateZ(Math.PI / 2), dk, sx, 0.4, sz);
+    guardTruck.userData.bar = part(new THREE.BoxGeometry(1.4, 0.2, 0.3), new THREE.MeshBasicMaterial({ color: 0xffa23a }), 0, 2.05, 0.4);
+  }
+  guardCone = coneFan(N.guard.len, N.guard.half, 0xffe066, 0.22);
+  guardLight = new THREE.SpotLight(0xfff2cc, 60, N.guard.len + 6, N.guard.half, 0.4, 1.4); scene.add(guardLight, guardLight.target);
+  // the floodlight towers
+  for (const F of N.lights) {
+    const y = heightAt(F.x, F.z), mast = new THREE.Mesh(new THREE.BoxGeometry(0.4, 9, 0.4), lam(0x565c66)); mast.position.set(F.x, y + 4.5, F.z); scene.add(mast);
+    const head = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.8, 0.6), new THREE.MeshBasicMaterial({ color: 0xffffee })); head.position.set(F.x, y + 9, F.z); scene.add(head);
+    floodCones.push(coneFan(F.len, F.half, 0xffffff, 0.16));
+    const sl = new THREE.SpotLight(0xffffff, 140, F.len + 10, F.half, 0.3, 1.2); sl.position.set(F.x, y + 9, F.z); scene.add(sl, sl.target); floodLights.push({ sl, head });
+  }
+  generator = addCrate(N.generator.x, N.generator.z, 2.0, 1.5, 1.4, 0xd8333a, "floodlight generator", 160);
+  alarmTint = document.createElement("div"); alarmTint.id = "alarmtint"; document.body.appendChild(alarmTint);
+}
+
+// ----- level 10: Firebreak -----
+const FG = 96, FCELL = 2;                                     // the fire grid: 96 x 96 cells of 2 m
+const fireS = SITE === "fire" ? new Uint8Array(FG * FG) : null;     // 0 grass, 1 burning, 2 burnt
+const fireT = SITE === "fire" ? new Float32Array(FG * FG) : null;   // seconds left burning
+const scraped = SITE === "fire" ? new Uint8Array(FG * FG) : null;   // flattened bare by the roller
+const fireNet = [], scrapeNet = [];
+const fcOf = (x, z) => clamp(Math.floor((z + HALF) / FCELL), 0, FG - 1) + clamp(Math.floor((x + HALF) / FCELL), 0, FG - 1) * FG;
+const fcX = (c) => Math.floor(c / FG) * FCELL - HALF + 1, fcZ = (c) => (c % FG) * FCELL - HALF + 1;
+let flames = null, burntMesh = null, cows = [], fireTrees = [];
+if (SITE === "fire") {
+  const F = FIRE;
+  // dusk
+  { const hemi = scene.children.find((o) => o.isHemisphereLight); scene.background.set(0xe7a067); scene.fog.color.set(0xd9946a); scene.fog.near = 70; scene.fog.far = 220;
+    if (hemi) { hemi.intensity = 0.85; hemi.color.set(0xffd2a8); } sun.intensity = 1.3; sun.color.set(0xffa86a); }
+  backdropTrees(130, 82, 94);
+  // the farm: house, barn, fences round the field, cows
+  { const b = building({ x: -26, z: -44, w: 10, d: 8, h: 6, door: 4, dh: 3.5, face: 1, wall: 0xa8392c, roof: 0x5b5f66 }); b.sign.userData.draw("Linston Ranch", "Keep the fire off it", "#ff9c6a");
+    const hs = building({ x: 26, z: -46, w: 8, d: 7, h: 4, door: 2.2, dh: 2.3, face: 1, wall: 0xe9dcc3, roof: 0x8f3b2e }); hs.sign.visible = false; }
+  const Fm = F.farm;
+  fenceLine(Fm.x0, Fm.z0, Fm.x1, Fm.z0); fenceLine(Fm.x0, Fm.z0, Fm.x0, Fm.z1); fenceLine(Fm.x1, Fm.z0, Fm.x1, Fm.z1);
+  fenceLine(Fm.x0, Fm.z1, -4, Fm.z1); fenceLine(4, Fm.z1, Fm.x1, Fm.z1);
+  for (const [x, z] of F.cows) {
+    const c = new THREE.Group(); c.position.set(x, heightAt(x, z), z); c.rotation.y = rng() * 6; scene.add(c);
+    const white = lam(0xf4f1ea), blk = lam(0x22262c);
+    const part = (geo, mat, px, py, pz) => { const m = new THREE.Mesh(geo, mat); m.position.set(px, py, pz); m.castShadow = true; c.add(m); };
+    part(new THREE.BoxGeometry(1.0, 0.8, 1.9), white, 0, 1.0, 0); part(new THREE.BoxGeometry(0.5, 0.45, 0.4), blk, 0.2, 1.1, 0.3);
+    part(new THREE.BoxGeometry(0.55, 0.55, 0.6), white, 0, 1.3, 1.1); for (const sx of [-0.35, 0.35]) for (const sz of [-0.7, 0.7]) part(new THREE.BoxGeometry(0.2, 0.7, 0.2), blk, sx, 0.35, sz);
+    c.userData.y0 = c.position.y; cows.push(c);
+  }
+  // the suggested line: little flags across the valley
+  for (let x = -76; x <= 76; x += 8) { const f = new THREE.Mesh(new THREE.ConeGeometry(0.25, 0.9, 4), lam(0xffc928)); f.position.set(x, heightAt(x, F.line.z) + 0.45, F.line.z); scene.add(f); }
+  // fire visuals: flames on burning cells, scorched squares on burnt ones
+  flames = new THREE.InstancedMesh(new THREE.ConeGeometry(0.9, 2.2, 6), new THREE.MeshBasicMaterial({ color: 0xff8a2a, transparent: true, opacity: 0.9 }), 2400);
+  flames.count = 0; flames.frustumCulled = false; scene.add(flames);
+  burntMesh = new THREE.InstancedMesh(new THREE.PlaneGeometry(FCELL, FCELL).rotateX(-Math.PI / 2), new THREE.MeshLambertMaterial({ color: 0x2a2420, transparent: true, opacity: 0.85, depthWrite: false }), FG * FG);
+  burntMesh.count = 0; burntMesh.frustumCulled = false; scene.add(burntMesh);
+  // trees in the valley: they burn hot and throw embers. Fell them and drag them clear.
+  for (const [x, z] of F.trees) fireTrees.push(addStandingTree(x, z, 1.2, false));
+}
+
 function setActiveBoulders(n) {
   n = clamp(n, 5, boulders.length);
   for (let i = 0; i < boulders.length; i++) {
@@ -1396,7 +1638,7 @@ function box(mat, sx, sy, sz, x, y, z, parent) {
   m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
   return m;
 }
-const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn, ridge: RIDGE.spawn, haul: HAUL.spawn, flood: FLOOD.spawn, treasure: TREASURE.spawn, airstrip: AIR.spawn }[SITE];
+const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn, ridge: RIDGE.spawn, haul: HAUL.spawn, flood: FLOOD.spawn, treasure: TREASURE.spawn, airstrip: AIR.spawn, sands: SANDS.spawn, night: NIGHT.spawn, fire: FIRE.spawn }[SITE];
 const spawnAt = (slot) => {
   const off = -7.5 + slot * 5, c = Math.cos(site0.yaw), s = Math.sin(site0.yaw);
   return { x: site0.x + off * c, z: site0.z - off * s, yaw: site0.yaw };
@@ -1561,7 +1803,13 @@ function makeLoader(slot, local) {
   box(paint, 2.5, 1.35, 0.12, 0, 0.67, 4.4, bedPivot);
   const bedHeap = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 6), lam(0x8a6238, true)); bedHeap.position.set(0, 0.12, 2.2); bedHeap.visible = false; bedHeap.castShadow = true; bedPivot.add(bedHeap);
   const decor = buildDecor(group);
-  const ld = { slot, paint, bedPivot, bedHeap, bed: 0, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, loadG: 0, roll: 0,
+  let headlight = null;
+  if (SITE === "night") {
+    headlight = new THREE.SpotLight(0xfff2cc, 45, 40, 0.55, 0.45, 1.3); headlight.position.set(0, 1.4, 2.6);
+    const tgt = new THREE.Object3D(); tgt.position.set(0, -0.5, 14); group.add(headlight, tgt); headlight.target = tgt;
+    for (const sx of [-0.6, 0.6]) box(new THREE.MeshBasicMaterial({ color: 0xfff6d6 }), 0.3, 0.2, 0.05, sx, 0.75, 1.95, group);
+  }
+  const ld = { headlight, hl: true, slot, paint, bedPivot, bedHeap, bed: 0, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, loadG: 0, roll: 0,
     kind: "loader", vis: { loader: loaderVis, roller: rollerVis, truck: truckVis }, drums, decor, look: { ...DEFAULT_LOOK } };
   return ld;
 }
@@ -1581,7 +1829,7 @@ try { myLook = cleanLook(JSON.parse(localStorage.getItem("jobsite-look") || "nul
 applyLook(me, myLook);
 const chassis = me.body;
 // Places to change vehicle: the garage in the quarry, and a vehicle yard near the start of each job.
-const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 }, haul: HAUL.yards[0], flood: FLOOD.yards[0], treasure: TREASURE.yards[0], airstrip: AIR.yards[0] }[SITE] || null;
+const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 }, haul: HAUL.yards[0], flood: FLOOD.yards[0], treasure: TREASURE.yards[0], airstrip: AIR.yards[0], sands: SANDS.yards[0], night: NIGHT.yards[0], fire: FIRE.yards[0] }[SITE] || null;
 const YARDS = { haul: HAUL.yards, flood: FLOOD.yards, airstrip: AIR.yards }[SITE] || (YARD ? [YARD] : []);
 function parkDisplay(kind, slot, x, z, yaw) {
   const d = makeLoader(slot, false);
@@ -1600,7 +1848,7 @@ if (SITE === "hub") {
   if (SITE === "farm") { barnRoller = parkDisplay("roller", 2, FARM.roller.x, FARM.roller.z, Math.PI); barnRoller.group.visible = false; displays.push(barnRoller); }
   YARDS.forEach((y, n) => {
     marker(y.x, y.z, y.r, 0xb48cff);
-    const big = ["haul", "flood", "treasure", "airstrip"].includes(SITE);
+    const big = ["haul", "flood", "treasure", "airstrip", "sands", "night", "fire"].includes(SITE);
     displays.push(parkDisplay(big ? "truck" : "roller", 2, y.x + 8.5, y.z + 1, -0.5));
     if (big && n === 0) displays.push(parkDisplay("roller", 3, y.x - 8.5, y.z + 1, 0.5));
   });
@@ -1869,7 +2117,7 @@ function inPaintShop() {
   const t = chassis.translation(), ps = houses.find((h) => h.paint);
   return !!ps && ps.b.inside(t.x, t.z);
 }
-const NEW_LEVEL = SITE === "treasure" || SITE === "airstrip";        // the new levels: every vehicle is yours
+const NEW_LEVEL = ["treasure", "airstrip", "sands", "night", "fire"].includes(SITE);        // the new levels: every vehicle is yours
 const rollerUnlocked = () => testUnlock || NEW_LEVEL || SITE === "river" || SITE === "ridge" || !!(progress.farm && progress.farm.done);
 // the ranger hands the dump truck over at the gravel pit in Gravel Run; after that it's yours everywhere
 const truckUnlocked = () => testUnlock || NEW_LEVEL || SITE === "flood" || !!progress.truck || !!(progress.haul && progress.haul.done) || (SITE === "haul" && !!obj && obj.has("pit"));
@@ -2156,6 +2404,25 @@ if (SITE === "flood") {
     F.cars.length > 0 && { id: "cars", bonus: true, text: () => `Rescue the cars from the river: ${cars.filter((c, k) => job.marks.has("car" + k)).length} / ${cars.length}`, done: () => cars.every((c, k) => job.marks.has("car" + k)) },
   ].filter(Boolean), onObjective);
 }
+if (SITE === "fire") {
+  obj = createObjectives([
+    { id: "out", text: "Keep the fire off the farm until it burns out", done: () => job.marks.has("out") },
+    { id: "trees", bonus: true, text: () => `Drag the trees out of the valley: ${fireTrees.filter((t) => !t.active).length} / ${fireTrees.length} felled`, done: () => fireTrees.every((t) => !t.active) },
+  ], onObjective);
+}
+if (SITE === "night") {
+  obj = createObjectives([
+    { id: "in", text: "Get through Grade-A Grading's fence", done: () => panels.some((p) => !p.active) },
+    { id: "soil", text: () => `Deliver ${NIGHT.need} m\u00b3 of topsoil to your lot: ${Math.min(NIGHT.need, Math.round(job.delivered || 0))}`, progress: () => (job.delivered || 0) / NIGHT.need, done: () => (job.delivered || 0) >= NIGHT.need },
+    { id: "lights", bonus: true, text: "Cut the floodlights (winch the generator away)", done: () => !powerOn() },
+  ], onObjective);
+}
+if (SITE === "sands") {
+  obj = createObjectives([
+    { id: "fill", text: "Fill the pit with sand", progress: () => (job.fill || 0) / 0.9, done: () => job.fill >= 0.9 },
+    { id: "seal", after: ["fill"], text: "Roll the new sand to seal the pit", progress: () => (job.sealPack || 0) / 0.8, done: () => job.sealPack >= 0.8 },
+  ], onObjective);
+}
 if (SITE === "treasure") {
   const T = TREASURE, clue = (k) => () => (k === 0 || obj.has("c" + (k - 1)) ? `Clue ${k + 1}: ${clueText(k)}` : `Clue ${k + 1}: written on the post you dig up`);
   obj = createObjectives([
@@ -2202,6 +2469,9 @@ if (SITE === "ridge") {
 const OBJ_BANNER = {
   farm: { pig: "<b>Found her!</b>", tractor: "<b>Tractor rescued!</b>", gate: "<b>Gate clear!</b>", sink: "<b>Sinkhole filled!</b>", logs: "<b>Logs stacked!</b>The barn doors are open." },
   flood: { gate: "<b>Floodgate shut!</b>", breaks: "<b>Every break plugged!</b>Now hold on until the river peaks.", cars: "<b>All three cars rescued!</b>Bonus job done." },
+  fire: { out: "<b>The fire is out!</b>", trees: "<b>No trees left to burn!</b>Bonus job done." },
+  night: { in: "<b>You're in.</b>Quietly now.", soil: "<b>That's the lot!</b>Nobody saw a thing.", lights: "<b>Lights out!</b>The floodlights have no power." },
+  sands: { fill: "<b>Pit filled!</b>Now roll it to seal the worm in.", seal: "<b>Sealed!</b>The worm has nowhere to go." },
   treasure: { c0: "<b>A marker post!</b>Clue 2 is written on it.", c1: "<b>Another post!</b>Clue 3 is on this one.", c2: "<b>The last post!</b>It says where the chest is.", c3: "<b>The chest!</b>Winch it out of the hole." },
   airstrip: { trees: "<b>All the trees are down!</b>", clear: "<b>Strip clear!</b>", grade: "<b>Strip level!</b>", mud: "<b>Mud gravelled!</b>", pack: "<b>Strip rolled firm!</b>" },
   haul: { ford: "<b>Ford graveled!</b>A loaded truck can cross the stream now.", pit: "<b>Pit road open!</b>The dump truck is yours.", haul: "<b>First load down!</b>",
@@ -2220,6 +2490,7 @@ function onObjective(id, quiet) {
   const b = OBJ_BANNER[SITE] && OBJ_BANNER[SITE][id];
   if (b) { showBanner(b, 4000); sfx.ding(); }
   say(id);
+  if (SITE === "fire" && id === "out") { job.party = 0; job.saved = farmSaved(); say(job.saved >= 0.999 ? "done" : "doneSome"); if (job.saved >= 0.999) sfx.cheer(); finishLevel(); return; }
   if (SITE === "airstrip" && id === "ready") { const tier = [3, 2, 1].find((n) => job.marks.has("tier" + n)) || 2; say("done" + tier); finishLevel(); return; }
   if (SITE === "flood" && id === "hold") { job.party = 0; say("done"); finishLevel(); return; }      // the river peaked: whatever state the town is in, the job is over
   if (obj.mainDone()) { say("done"); if (SITE === "river" || SITE === "ridge" || SITE === "haul") job.party = 0; if (SITE === "haul") job.queueAtOpen = queueLen(); if (SITE === "river") sfx.cheer(); finishLevel(); }
@@ -2229,6 +2500,9 @@ const starGoals = () => (CFG.LEVELS[SITE] && CFG.LEVELS[SITE].stars) || CFG.DEFA
 const bonusCount = () => (obj ? obj.bonusDone() : (flags & FL.stump ? 1 : 0) + (flags & FL.tractor ? 1 : 0));
 function starChecks() {
   if (SITE === "farm") return [true, job.time <= CFG.LEVELS.farm.targetTime, !job.pigPushed];
+  if (SITE === "fire") return [true, (job.saved ?? 1) >= CFG.LEVELS.fire.savedStar, (job.saved ?? 1) >= 0.999];
+  if (SITE === "night") return [true, !job.marks.has("alarm"), job.time <= CFG.LEVELS.night.targetTime];
+  if (SITE === "sands") return [true, swallowCount() <= CFG.LEVELS.sands.swallowStar, swallowCount() === 0];
   if (SITE === "treasure") return [true, job.time <= CFG.LEVELS.treasure.targetTime, !TREASURE.decoys.some((d, k) => job.marks.has("decoy" + k))];
   if (SITE === "airstrip") { const tier = [3, 2, 1].find((n) => job.marks.has("tier" + n)) || 0; return [true, tier >= 2, tier >= 3]; }
   if (SITE === "flood") return [true, job.dry >= CFG.LEVELS.flood.dryStar, job.dry >= 0.999 && cars.every((c, k) => job.marks.has("car" + k))];
@@ -2290,7 +2564,7 @@ function buildSync() {
   const pk = [];
   for (let i = 0; i < pack.length; i++) if (Math.abs(pack[i] - pack0[i]) > 0.01) pk.push(i, Math.round(pack[i] * 100));
   return { t: "sync", ver: SYNC_VER, site: SITE, rk, tr, time: Math.round(job.time), flags, nb: activeBoulders, gv: gravel, gt, hop: hopper ? [r3(hopper.vol), r3(hopper.g)] : null, wl: job.water, wh: job.hold, fs: [job.townVol, job.pasture], gc: job.gateClose,
-    pk, ob: obj ? obj.list() : [], pp: job.pigPushed ? 1 : 0, ct: job.tiersLost || 0, jm: [...job.marks] };
+    pk, ob: obj ? obj.list() : [], pp: job.pigPushed ? 1 : 0, ct: job.tiersLost || 0, jm: [...job.marks], fire: fireS ? [...fireS.keys()].filter((c) => fireS[c]).flatMap((c) => [c, fireS[c]]) : null, scr: scraped ? [...scraped.keys()].filter((c) => scraped[c]) : null };
 }
 function applySync(s) {
   if (!s || s.ver !== SYNC_VER || s.site !== SITE || !Array.isArray(s.rk) || !Array.isArray(s.tr)) return;
@@ -2316,7 +2590,9 @@ function applySync(s) {
   if (Array.isArray(s.ob) && obj) for (const id of s.ob) obj.complete(String(id), true);
   if (s.pp) job.pigPushed = true;
   if (s.ct) job.tiersLost = Math.min(3, s.ct | 0);
-  if (Array.isArray(s.jm)) for (const k of s.jm) job.marks.add(String(k));       // quietly: no banners or pop-ups for old news
+  if (Array.isArray(s.jm)) for (const k of s.jm) job.marks.add(String(k));
+  if (fireS && Array.isArray(s.fire)) for (let k = 0; k + 1 < s.fire.length; k += 2) fireS[s.fire[k]] = s.fire[k + 1];
+  if (scraped && Array.isArray(s.scr)) for (const c of s.scr) scraped[c] = 1;       // quietly: no banners or pop-ups for old news
 }
 
 function setRoster(list) {
@@ -2384,6 +2660,9 @@ function onPeerMessage(from, m) {
   peer.pos.set(m.p[0], m.p[1], m.p[2]);
   peer.h = Array.isArray(m.h) ? m.h : null;
   setKind(peer.loader, KIND_ORDER[m.k] || "loader");
+  if (fireS && Array.isArray(m.fr)) for (let k = 0; k + 1 < m.fr.length; k += 2) { const c = m.fr[k]; if (c >= 0 && c < fireS.length) fireS[c] = m.fr[k + 1]; }
+  if (scraped && Array.isArray(m.fs2)) for (const c of m.fs2) if (c >= 0 && c < scraped.length) scraped[c] = 1;
+  if (peer.loader.headlight && m.hl !== undefined) { peer.loader.hl = !!m.hl; peer.loader.headlight.visible = peer.loader.hl; }
   if (Array.isArray(m.lk)) {
     const key = m.lk.join(",");
     if (key !== peer.lookKey) { peer.lookKey = key; applyLook(peer.loader, cleanLook(m.lk)); renderRoster(); }
@@ -2445,6 +2724,9 @@ function sendState() {
   const m = { t: "s", p: [r3(t.x), r3(t.y), r3(t.z)], q: [r3(q.x), r3(q.y), r3(q.z), r3(q.w)], a: r3(me.arm), b: r3(me.tilt), w: r3(me.steer), l: r3(me.load), v: r3(me.speed), k: KIND_ORDER.indexOf(me.kind), bd: r3(me.bed || 0) };
   if (winch.on) m.h = [winch.kind, winch.ref, r3(winch.local.x), r3(winch.local.y), r3(winch.local.z), r3(winch.len), Math.round(winch.T)];
   if (flags) m.fl = flags;
+  if (me.headlight) m.hl = me.hl ? 1 : 0;
+  if (fireS && fireNet.length) { m.fr = fireNet.splice(0); }
+  if (scraped && scrapeNet.length) { m.fs2 = scrapeNet.splice(0); }
   if (lookDirty || stepCount % 60 === 0) { m.lk = lookArr(myLook); lookDirty = false; }     // paint job: when it changes, and every second for newcomers
   if (SITE === "farm") m.nb = activeBoulders;
   if (gravel.length) m.gv = gravel;
@@ -2575,7 +2857,7 @@ elCustom.addEventListener("click", (e) => {
 // X / B curl and dump, A brakes, Y hooks the winch, D-pad up / down reels, right stick looks around.
 const pad = { on: false, prev: [], rx: 0, ry: 0 };
 const PAD_LABEL = { KeyW: "RT", KeyS: "LT", KeyA: "Left stick", KeyD: "", Space: "A", ArrowUp: "RB", ArrowDown: "LB", ArrowLeft: "X", ArrowRight: "B",
-  KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyG: "D-pad &larr;", KeyR: "View", KeyC: "R3", KeyH: "Menu", KeyO: "L3", Enter: "Menu" };
+  KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyG: "D-pad &larr;", KeyR: "View", KeyC: "R3", KeyH: "Menu", KeyO: "L3", KeyL: "L3", Enter: "Menu" };
 function readPad() {
   const list = navigator.getGamepads ? navigator.getGamepads() : [];
   let gp = null;
@@ -2602,7 +2884,7 @@ function readPad() {
       if (hit(8)) resetLoader();
       if (hit(11) || hit(14)) { cam.offset = 0; cam.pitch = CAM_PITCH; cam.dist = CAM_DIST; }
       if (hit(9) && !popups.skip()) toggleHints();        // Menu skips a pop-up line if one is showing
-      if (hit(10)) cycleOverlay();
+      if (hit(10)) { if (me.headlight) { me.hl = !me.hl; me.headlight.visible = me.hl; } else cycleOverlay(); }
     }
   }
   pad.prev = gp.buttons.map((x) => x.value);
@@ -2657,6 +2939,7 @@ addEventListener("keydown", (e) => {
   }
   if (e.code === "KeyH") toggleHints();
   if (e.code === "KeyO") cycleOverlay();
+  if (e.code === "KeyL" && me.headlight) { me.hl = !me.hl; me.headlight.visible = me.hl; }
   if (e.code === "Enter") popups.skip();
   if (pad.on) { pad.on = false; refreshHelp(); }          // back on the keyboard: show keyboard keys again
 });
@@ -2680,7 +2963,7 @@ let bannerTimer = 0;
 function showBanner(html, ms) { elBanner.innerHTML = html; elBanner.style.display = "block"; clearTimeout(bannerTimer); bannerTimer = setTimeout(() => { elBanner.style.display = "none"; }, ms); }
 elTasks.addEventListener("click", (e) => { if (e.target.id === "leave") goSite("hub"); });
 const row = (ok, text, cls = "") => `<div class="${cls} ${ok ? "done" : ""}">${ok ? "&#10003;" : "&#9675;"} ${text}</div>`;
-const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", G: "KeyG", R: "KeyR", H: "KeyH", C: "KeyC", O: "KeyO", Enter: "Enter", Space: "Space",
+const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", G: "KeyG", R: "KeyR", H: "KeyH", C: "KeyC", O: "KeyO", L: "KeyL", Enter: "Enter", Space: "Space",
   "&uarr;": "ArrowUp", "&darr;": "ArrowDown", "&larr;": "ArrowLeft", "&rarr;": "ArrowRight" };
 const K = (k) => { const t = pad.on && KEY_CODE[k] ? PAD_LABEL[KEY_CODE[k]] : k; return t ? `<kbd>${t}</kbd>` : ""; };
 const elHelp = document.getElementById("help"), HELP_KEYS = elHelp.innerHTML;
@@ -3367,7 +3650,6 @@ function checkFlood() {
 }
 
 // ----- X Marks the Spot rules -----
-const idxAt = (x, z) => Math.round((z + HALF) / CELL) + Math.round((x + HALF) / CELL) * W;
 const dugOut = (x, z) => { const i = idxAt(x, z); return heights[i] < base[i] - 0.45; };          // the mound has been dug through
 function chestExposed() {
   const C = TCLUES[3], top = tChest.body.translation().y + 0.45;
@@ -3559,8 +3841,285 @@ function checkAir() {
   setHint(h);
 }
 
-const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep(), ridge: () => ridgeStep(), haul: () => haulStep(), flood: () => floodStep(), treasure: () => treasureStep(), airstrip: () => airStep() }[SITE];
-const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver(), ridge: () => checkRidge(), haul: () => checkHaul(), flood: () => checkFlood(), treasure: () => checkTreasure(), airstrip: () => checkAir() }[SITE];
+// ----- Sinking Sands rules -----
+// The worm is deliberately simple: it lives in the pit and strikes on a fixed beat. A few seconds before,
+// ripples run inward and the ground rumbles; then everything inside its ring is grabbed, shaken empty and
+// thrown out to the edge. The ring shrinks as the pit fills, and the beat quickens. Nothing else.
+const SINK_SAND = () => { let d = 0; for (let k = 0; k < pitCells.length; k++) d += Math.max(0, pitTarget[k] - heights[pitCells[k]]); return d * CELL * CELL; };
+let SANDS_START = 0;
+function sandsFill() { if (!SANDS_START) SANDS_START = Math.max(1, SINK_SAND()); return clamp(1 - SINK_SAND() / SANDS_START, 0, 1); }
+const wormR = () => lerp(SANDS.ring.start, SANDS.ring.end, clamp(job.fill / 0.9, 0, 1));
+function sandsStep() {
+  const S = SANDS, P = S.pit, St = S.strike, t = chassis.translation();
+  smashRocks();
+  const sealed = obj.has("seal");
+  // the beat: a phase that runs faster as the pit fills (every game counts it from the shared clock)
+  if (!sealed && job.time > St.grace) job.wormPhase = (job.wormPhase || 0) + DT / lerp(St.every, St.everyEnd, clamp(job.fill / 0.9, 0, 1));
+  const ph = job.wormPhase || 0, beat = Math.floor(ph), into = (ph - beat) * lerp(St.every, St.everyEnd, clamp(job.fill / 0.9, 0, 1));
+  const untilStrike = lerp(St.every, St.everyEnd, clamp(job.fill / 0.9, 0, 1)) - into, R = wormR(), inside = Math.hypot(t.x - P.x, t.z - P.z) < R;
+  wormRing.scale.setScalar(R); wormRing.visible = !sealed;
+  // warning: ripples running inward, a rumble, the camera shakes if you're inside
+  const warn = !sealed && job.time > St.grace && untilStrike < St.warn;
+  wormRipples.visible = warn;
+  if (warn) {
+    wormRipples.children.forEach((r, k) => { const f = 1 - (((St.warn - untilStrike) * 0.6 + k / 3) % 1); r.scale.setScalar(Math.max(0.5, R * f)); r.position.set(P.x, P.level + 0.25, P.z); });
+    if (!job.warned) { job.warned = true; sfx.rumble(); }
+    if (inside) cam.shake = 0.25;
+  } else job.warned = false;
+  // the strike
+  if (!sealed && beat > (job.lastBeat ?? 0)) {
+    job.lastBeat = beat; job.mouthT = 1.6; sfx.splash();
+    if (inside) {
+      hookOff(); me.load = 0; me.loadG = 0; me.bed = 0;
+      const a = Math.atan2(t.x - P.x, t.z - P.z), d = R + 5;
+      placeLoader(P.x + Math.sin(a) * d, P.z + Math.cos(a) * d, a);
+      chassis.setLinvel({ x: Math.sin(a) * 5, y: 7, z: Math.cos(a) * 5 }, true);
+      job.marks.add("sw" + (net.id || 0) + "_" + beat);
+      showBanner("<b>CHOMP!</b>The worm shook you empty and spat you out. Leave the ring before it strikes.", 3500);
+    }
+  }
+  if (job.mouthT > 0) {
+    job.mouthT -= DT; wormMouth.visible = true;
+    const up = Math.sin(Math.min(1, (1.6 - job.mouthT) / 1.6) * Math.PI);
+    wormMouth.position.set(P.x, heightAt(P.x, P.z) - 9 + up * 7, P.z); wormMouth.rotation.y += DT * 2;
+  } else wormMouth.visible = false;
+  if (!job.moved && Math.hypot(t.x - S.spawn.x, t.z - S.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+const swallowCount = () => [...job.marks].filter((m) => m.startsWith("sw")).length;
+function checkSands() {
+  const S = SANDS, P = S.pit;
+  job.fill = sandsFill();
+  let n = 0, firmN = 0; for (const i of pitCells) { if (heights[i] > base[i] + 0.3) { n++; if (pack[i] >= 0.7) firmN++; } }
+  job.sealPack = n ? firmN / n : 0;
+  obj.update();
+  const t = chassis.translation(), inside = Math.hypot(t.x - P.x, t.z - P.z) < wormR();
+  elTasks.innerHTML = `<h2>Sinking Sands</h2>${obj.render()}
+    <div class="sub">Swallowed: ${swallowCount()} ${swallowCount() ? "" : "&middot; keep it that way"}</div>
+    ${starsHtml(obj.mainDone())}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  const cur = obj.current(), id = cur && cur.id;
+  let h = "";
+  if (!job.moved) h = "Old Ginston wants his pit filled in. Grab sand from the dunes and tip it in. He didn't mention anything else.";
+  else if (obj.has("seal")) h = "";
+  else if (job.time > S.strike.grace && inside) h = `You're inside the red ring. When the ground shakes and the ripples run inward, get out!`;
+  else if (id === "fill") h = me.load > 0.5
+    ? `Wait for the worm to strike, then dash in and dump ${K("&rarr;")}, and get out before the next one. Sand slides flat: crushed rock (gravel) mixed in holds steeper.`
+    : `Fill the pit with sand from the dunes. Crush rocks into gravel too: gravel holds its shape where sand slumps.`;
+  else if (id === "seal") h = `Seal it: roll the new sand firm with the road roller (${K("F")} at the purple yard). Between strikes!`;
+  setHint(h);
+}
+
+// ----- Night Shift rules -----
+// The guard truck and the floodlights follow the shared clock, so they're in the same place for everyone.
+function guardAt(t) {
+  const G2 = NIGHT.guard, P = G2.path, legs = P.map((p, k) => { const q = P[(k + 1) % P.length]; return Math.hypot(q[0] - p[0], q[1] - p[1]) / G2.speed; });
+  const cycle = legs.reduce((a, b) => a + b, 0) + G2.pause * P.length;
+  let r = t % cycle;
+  for (let k = 0; k < P.length; k++) {
+    const p = P[k], q = P[(k + 1) % P.length], yaw = Math.atan2(q[0] - p[0], q[1] - p[1]);
+    if (r < legs[k]) { const u = r / legs[k]; return { x: lerp(p[0], q[0], u), z: lerp(p[1], q[1], u), yaw }; }
+    r -= legs[k];
+    if (r < G2.pause) { const nq = P[(k + 2) % P.length], nyaw = Math.atan2(nq[0] - q[0], nq[1] - q[1]); let d = nyaw - yaw; d = Math.atan2(Math.sin(d), Math.cos(d)); return { x: q[0], z: q[1], yaw: yaw + d * smooth(0, G2.pause, r) }; }
+    r -= G2.pause;
+  }
+  return { x: P[0][0], z: P[0][1], yaw: 0 };
+}
+const powerOn = () => { if (!generator) return false; const p = generator.body.translation(); return Math.hypot(p.x - NIGHT.generator.x, p.z - NIGHT.generator.z) < 6; };
+function dropPanel(pn) {
+  if (!pn.active) return;
+  pn.active = false; pn.body.setEnabled(false);
+  if (winch.on && winch.kind === 1 && winch.ref === pn.index) hookOff();
+  pn.mesh.rotation.set(Math.PI / 2 * 0.98, pn.yaw, 0, "YXZ"); pn.mesh.position.y = heightAt(pn.x, pn.z) + 0.1;
+}
+function nightStep() {
+  const N = NIGHT, t = chassis.translation(), T = job.time;
+  // the guard
+  const gp = guardAt(T);
+  guardTruck.position.set(gp.x, heightAt(gp.x, gp.z), gp.z); guardTruck.rotation.y = gp.yaw;
+  guardTruck.userData.bar.material.color.setHex(Math.floor(T * 3) % 2 ? 0xffa23a : 0x5a3a10);
+  guardCone.position.set(gp.x, heightAt(gp.x, gp.z) + 0.15, gp.z); guardCone.rotation.y = gp.yaw;
+  guardLight.position.set(gp.x, heightAt(gp.x, gp.z) + 1.6, gp.z); guardLight.target.position.set(gp.x + Math.sin(gp.yaw) * 10, 0, gp.z + Math.cos(gp.yaw) * 10);
+  // the floodlights sweep (only while the generator is where it belongs)
+  const on = powerOn();
+  N.lights.forEach((F, k) => {
+    const yaw = F.aim + F.amp * Math.sin((T / F.period) * Math.PI * 2), y = heightAt(F.x, F.z);
+    floodCones[k].visible = on; floodCones[k].position.set(F.x, y + 0.2, F.z); floodCones[k].rotation.y = yaw;
+    floodLights[k].sl.visible = on; floodLights[k].sl.target.position.set(F.x + Math.sin(yaw) * 18, 0, F.z + Math.cos(yaw) * 18);
+    floodLights[k].head.material.color.setHex(on ? 0xffffee : 0x2a2e36);
+    F.yawNow = yaw;
+  });
+  // panels: dug under (quiet) or winched down (loud)
+  panels.forEach((pn, k) => {
+    if (!pn.active) return;
+    if (job.marks.has("pdown" + k)) return dropPanel(pn);
+    if (stepCount % 20 === k % 20) {
+      let under = 0;                                  // ground dug away under the panel, at three points along it
+      for (const f of [-0.35, 0, 0.35]) { const i = idxAt(pn.x + Math.sin(pn.yaw + Math.PI / 2) * f * pn.r * 2, pn.z + Math.cos(pn.yaw + Math.PI / 2) * f * pn.r * 2); if (heights[i] < base[i] - 0.6) under++; }
+      if (under >= 2) { job.marks.add("pdown" + k); return; }
+    }
+    pn.pullT = pullOn(pn) > CFG.LEVELS.night.panelPull ? pn.pullT + DT : 0;
+    if (pn.pullT > 0.5) {
+      job.marks.add("pdown" + k);
+      if (winch.on && winch.kind === 1 && winch.ref === pn.index) { job.spotted = Math.min(1, (job.spotted || 0) + CFG.LEVELS.night.loud); showBanner("<b>CLANG!</b>That was loud.", 2000); sfx.thunk(); }
+    }
+  });
+  // spotted: time inside the guard's cone or a floodlight fills the meter (faster with your headlights on)
+  if (job.alarmT > 0) job.alarmT -= DT;
+  else {
+    const G2 = N.guard, seen = inCone(t.x, t.z, gp.x, gp.z, gp.yaw, G2.len, G2.half) || (on && N.lights.some((F) => inCone(t.x, t.z, F.x, F.z, F.yawNow, F.len, F.half)));
+    const C = CFG.LEVELS.night;
+    job.spotted = clamp((job.spotted || 0) + (seen ? C.spotRate * (me.hl ? 2 : 1) : -C.spotDecay) * DT, 0, 1);
+    if (job.spotted >= 1) {                                                     // caught: lose the load, back across the road
+      job.spotted = 0; job.alarmT = C.alarmTime; job.marks.add("alarm");
+      if (me.load > 0.2) for (let k = 0; k < 8; k++) splat(t.x + (Math.random() - 0.5) * 3, t.z + (Math.random() - 0.5) * 3, me.load / 8, me.loadG / 8);
+      me.load = 0; me.loadG = 0; me.bed = 0; hookOff();
+      placeLoader(N.gate.x + (Math.random() - 0.5) * 8, N.road.z - 2, Math.PI);
+      sfx.honk(); sfx.honk();
+      showBanner("<b>ALARM!</b>The guard spotted you. Your load's gone and you're back across the road.", 4000);
+    }
+  }
+  alarmTint.style.opacity = job.alarmT > 0 ? 0.35 + 0.25 * Math.sin(T * 12) : (job.spotted || 0) * 0.6;
+  if (!job.moved && Math.hypot(t.x - N.spawn.x, t.z - N.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function checkNight() {
+  const N = NIGHT, L = N.lot;
+  let v = 0; for (let x = L.x - L.r; x <= L.x + L.r; x += CELL) for (let z = L.z - L.r; z <= L.z + L.r; z += CELL) if (Math.hypot(x - L.x, z - L.z) < L.r) { const i = idxAt(x, z); v += Math.max(0, heights[i] - base[i]); }
+  job.delivered = v * CELL * CELL;
+  obj.update();
+  const sp = job.spotted || 0;
+  elTasks.innerHTML = `<h2>Night Shift</h2>${obj.render()}
+    <div class="meter"><div class="sub">Spotted</div><div class="mrow"><span class="mbar"><i style="width:${Math.round(sp * 100)}%;background:${sp > 0.6 ? "#e0453a" : "#ffc928"}"></i></span></div>
+    <div class="sub">Floodlights: ${powerOn() ? "on" : '<span class="ok">off (no power)</span>'} &middot; your headlights: ${me.hl ? "on" : "off"} (${K("L")})</div></div>
+    ${starsHtml(obj.mainDone())}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  const t = chassis.translation(), inYard = t.x > N.yard.x0 && t.x < N.yard.x1 && t.z > N.yard.z0 && t.z < N.yard.z1;
+  let h = "";
+  if (!job.moved) h = `Grade-A Grading has the best topsoil in the valley. Borrow ${N.need} m&sup3; of it, quietly. Watch the guard's yellow cone and the white floodlight beams: stay out of them.`;
+  else if (!panels.some((p) => !p.active)) h = `Get through the fence: dig under a panel (quiet, slow) or winch one down (fast, loud). The floodlights run off the red generator outside the east fence: winch it away and they go dark.`;
+  else if (inYard) h = me.load > 0.5 ? `Got some! Back out, across the road, and tip it in your lot (green ring).` : `Scoop topsoil from the big pile. Keep out of the cones. Headlights off (${K("L")}) makes you harder to spot.`;
+  else if (me.load > 0.5) h = `Tip it ${K("&rarr;")} in your lot (green ring) south of the road.`;
+  else h = `Back for more. ${Math.round(job.delivered)} of ${N.need} m&sup3; delivered. A dump truck carries three buckets at once.`;
+  setHint(h);
+}
+
+// ----- Firebreak rules -----
+// Bare ground stops the fire: anything dug, dumped, gravelled, wet or rolled flat.
+function fireBare(c) {
+  if (scraped[c]) return true;
+  const x0 = Math.floor(c / FG) * FCELL - HALF, z0 = (c % FG) * FCELL - HALF;
+  for (const [dx, dz] of [[0.5, 0.5], [1.5, 0.5], [0.5, 1.5], [1.5, 1.5], [1, 1]]) {
+    const i = idxAt(x0 + dx, z0 + dz);
+    if (Math.abs(heights[i] - base[i]) > 0.08 || gravH[i] > 0.02) return true;
+  }
+  return false;
+}
+const windNow = () => (job.fireAt != null && job.time - job.fireAt > FIRE.windShift ? [0.62, -0.78] : [0, -1]);
+function setFire(c, s, t = 0) { fireS[c] = s; fireT[c] = t; if (net.online) fireNet.push(c, s); }
+function fireTick(dt) {
+  const C = CFG.LEVELS.fire, [wx, wz] = windNow(), burning = [];
+  for (let c = 0; c < fireS.length; c++) if (fireS[c] === 1) burning.push(c);
+  for (const c of burning) {
+    if (fireBare(c)) { setFire(c, 2); continue; }                       // smothered with dirt
+    fireT[c] -= dt;
+    if (fireT[c] <= 0) { setFire(c, 2); continue; }
+    const cx = Math.floor(c / FG), cz = c % FG;
+    for (let ox = -2; ox <= 2; ox++) for (let oz = -2; oz <= 2; oz++) {
+      if (!ox && !oz) continue;
+      const nx = cx + ox, nz = cz + oz; if (nx < 0 || nz < 0 || nx >= FG || nz >= FG) continue;
+      const n = nz + nx * FG; if (fireS[n] !== 0) continue;
+      const d = Math.hypot(ox, oz), dot = (ox * wx + oz * wz) / d, near = d < 1.5 ? 1 : 0.06;
+      const p = C.spread * near * Math.pow(0.12 + 0.88 * Math.max(0, dot), 1.6) * dt;
+      if (Math.random() < p && !fireBare(n)) setFire(n, 1, C.burnTime * (0.8 + Math.random() * 0.4));
+    }
+  }
+  // trees in the fire burn hot and throw embers downwind (spot fires)
+  for (const tr of fireTrees) {
+    if (!tr.active) continue;
+    const c = fcOf(tr.x, tr.z);
+    if (fireS[c] === 0 && burning.some((b) => Math.abs(Math.floor(b / FG) - Math.floor(c / FG)) <= 1 && Math.abs((b % FG) - (c % FG)) <= 1) && Math.random() < 0.3 * dt) setFire(c, 1, C.burnTime * 3);
+    if (fireS[c] === 1 && Math.random() < C.ember * dt) {
+      const dist = 6 + Math.random() * 6, side = (Math.random() - 0.5) * 6, ex = tr.x + wx * dist - wz * side, ez = tr.z + wz * dist + wx * side, e = fcOf(ex, ez);
+      if (fireS[e] === 0 && !fireBare(e)) { setFire(e, 1, C.burnTime); job.marks.add("ember"); }
+    }
+  }
+  return burning.length;
+}
+function drawFire() {
+  let nf = 0, nb = 0; const t = performance.now() / 1000;
+  for (let c = 0; c < fireS.length; c++) {
+    if (fireS[c] === 1 && nf < flames.count + 2400) {
+      const x = fcX(c), z = fcZ(c), s = 0.7 + 0.35 * Math.sin(t * 9 + c);
+      _m.makeScale(s, s * (1 + 0.3 * Math.sin(t * 13 + c * 1.7)), s).setPosition(x, heightAt(x, z) + 1.0 * s, z); if (nf < 2400) flames.setMatrixAt(nf++, _m);
+    } else if (fireS[c] === 2) { const x = fcX(c), z = fcZ(c); _m.makeTranslation(x, heightAt(x, z) + 0.06, z); burntMesh.setMatrixAt(nb++, _m); }
+  }
+  flames.count = nf; burntMesh.count = nb; flames.instanceMatrix.needsUpdate = true; burntMesh.instanceMatrix.needsUpdate = true;
+}
+function farmSaved() {
+  const Fm = FIRE.farm; let n = 0, ok = 0;
+  for (let x = Fm.x0 + 1; x < Fm.x1; x += FCELL) for (let z = Fm.z0 + 1; z < Fm.z1; z += FCELL) { n++; if (fireS[fcOf(x, z)] !== 2 && fireS[fcOf(x, z)] !== 1) ok++; }
+  return n ? ok / n : 1;
+}
+function fireStep() {
+  const F = FIRE, C = CFG.LEVELS.fire, t = chassis.translation(), host = !net.online || net.hostId === net.id;
+  fireTrees.forEach((tr, k) => {
+    if (job.marks.has("fell" + k)) fellTree(tr, k);
+    else { tr.pullT = pullOn(tr) > CFG.LEVELS.airstrip.treePull ? tr.pullT + DT : Math.max(0, tr.pullT - DT); if (tr.pullT > 0.8) job.marks.add("fell" + k); }
+  });
+  // the fire starts on time (every game knows when; only the host's game spreads it and shares the result)
+  if (job.fireAt == null && job.time >= F.ignite.at) {
+    job.fireAt = F.ignite.at;
+    if (host) for (let x = -76; x <= 76; x += FCELL) setFire(fcOf(x, F.ignite.z), 1, C.burnTime);
+    showBanner("<b>Here it comes!</b>The fire is coming down the valley.", 4000); say("fire");
+  }
+  if (job.fireAt != null && !job.shiftSeen && job.time - job.fireAt > F.windShift) { job.shiftSeen = true; showBanner("<b>The wind has shifted!</b>It's blowing south-east now: watch the ends of your line.", 5000); say("wind"); }
+  if (host && job.fireAt != null && job.party == null && stepCount % 12 === 0) {
+    job.burning = fireTick(12 * DT);
+    if (job.burning === 0 && job.time - job.fireAt > 20) job.fireOutT = (job.fireOutT || 0) + 12 * DT; else job.fireOutT = 0;
+    if (job.fireOutT > 6 || job.time - job.fireAt > C.maxFire) job.marks.add("out");
+  }
+  if (stepCount % 6 === 0 && flames) drawFire();
+  // smoke: driving through the fire fills the view with smoke (nothing else happens)
+  let smoky = false; const mc = fcOf(t.x, t.z);
+  for (const o of [0, 1, -1, FG, -FG]) if (fireS[mc + o] === 1) smoky = true;
+  scene.fog.far = lerp(scene.fog.far, smoky ? 18 : 220, 0.05); scene.fog.near = Math.min(70, scene.fog.far * 0.3);
+  // the roller presses grass flat: that's bare too
+  if (me.kind === "roller" && Math.abs(me.speed) > 0.5 && stepCount % 6 === 0) {
+    const h = heading();
+    for (const s of [-1.2, 0, 1.2]) for (const f of [1.7, -1.5]) {
+      const c = fcOf(t.x + Math.sin(h) * f + Math.cos(h) * s, t.z + Math.cos(h) * f - Math.sin(h) * s);
+      if (!scraped[c]) { scraped[c] = 1; if (net.online) scrapeNet.push(c); if (fireS[c] === 1) setFire(c, 2); }
+    }
+  }
+  if (job.party != null) { job.party += DT; cows.forEach((c, k) => { c.position.y = c.userData.y0 + Math.abs(Math.sin(job.party * 6 + k)) * (job.saved >= 0.999 ? 0.6 : 0); }); }
+  if (!job.moved && Math.hypot(t.x - F.spawn.x, t.z - F.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function checkFire() {
+  const F = FIRE;
+  job.saved = farmSaved();
+  obj.update();
+  const [wx, wz] = windNow(), arrow = wx > 0.3 ? "&#8600; south-east" : "&#8595; south";
+  const left = F.ignite.at - job.time;
+  elTasks.innerHTML = `<h2>Firebreak</h2>${obj.render()}
+    <div class="sub">${job.fireAt == null ? `The fire starts in <b>${clock(Math.max(0, left))}</b>` : "The fire is burning"} &middot; wind ${arrow}</div>
+    <div class="sub">Farm safe: <span class="${job.saved < 0.8 ? "hot" : "ok"}">${Math.round(job.saved * 100)}%</span></div>
+    ${starsHtml(obj.mainDone())}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  let h = "";
+  if (job.party != null) h = "";
+  else if (!job.moved || job.fireAt == null) h = `A wildfire is coming down the valley. Cut a firebreak across it before it arrives (yellow flags): fire can't cross <b>bare dirt</b>. Lower the bucket ${K("&darr;")} and drive to scrape the grass, or roll it flat with the road roller. Make it wide, and wrap it round the farm's sides.`;
+  else if (job.marks.has("ember") && !job.emberHinted) { job.emberHinted = true; h = "Embers from the burning trees started a spot fire! Dump dirt on it to smother it."; }
+  else h = windNow()[0] > 0.3 ? "The wind shifted south-east: the fire will try to get round the east end of your line. Extend it!" : "Hold the line. Smother spot fires with dirt. Trees near your line throw embers: winch them away.";
+  setHint(h);
+}
+
+const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep(), ridge: () => ridgeStep(), haul: () => haulStep(), flood: () => floodStep(), treasure: () => treasureStep(), airstrip: () => airStep(), sands: () => sandsStep(), night: () => nightStep(), fire: () => fireStep() }[SITE];
+const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver(), ridge: () => checkRidge(), haul: () => checkHaul(), flood: () => checkFlood(), treasure: () => checkTreasure(), airstrip: () => checkAir(), sands: () => checkSands(), night: () => checkNight(), fire: () => checkFire() }[SITE];
 function checkHub() {
   const rows = houses.map((hs) => {
     const p = progress[hs.id];
@@ -3668,6 +4227,7 @@ function syncVisuals(dt, now = performance.now()) {
   camera.position.set(_target.x - Math.sin(yaw) * ch, _target.y + Math.sin(cam.pitch) * cam.dist, _target.z - Math.cos(yaw) * ch);
   camera.position.y = Math.max(camera.position.y, heightAt(camera.position.x, camera.position.z) + 1.2);
   camera.lookAt(_target);
+  if (cam.shake > 0) { camera.position.x += (Math.random() - 0.5) * cam.shake; camera.position.y += (Math.random() - 0.5) * cam.shake; cam.shake = Math.max(0, cam.shake - dt); }
   sun.target.position.copy(_target);
   sun.position.copy(_target).addScaledVector(SUN_DIR, 110);
 
@@ -3761,4 +4321,4 @@ window.__game = { SITE, world, chassis, vehicle, props, anchors, boulders, logs,
   run(steps, set = {}) { Object.assign(input, set); for (let i = 0; i < steps; i++) physicsStep(); syncVisuals(DT); target = !winch.on ? findTarget() : null; siteCheck(); },
   render() { renderer.render(scene, camera); },
   refreshTerrain() { for (const c of chunks) { buildCollider(c); buildMesh(c); } },          // after a test edits heights directly
-  marks: () => job.marks, TREASURE, TCLUES, TLAYOUT, tChest: () => tChest, AIR, standing, stripRocks, stripStats, stripClutter, get rainWet() { return rainWet; } };
+  marks: () => job.marks, FIRE, fireS: () => fireS, scraped: () => scraped, farmSaved, fcOf, fireTrees, NIGHT, panels, guardAt, powerOn, generator: () => generator, get spotted() { return job.spotted; }, SANDS, sandsFill, swallowCount, get wormPhase() { return job.wormPhase; }, TREASURE, TCLUES, TLAYOUT, tChest: () => tChest, AIR, standing, stripRocks, stripStats, stripClutter, get rainWet() { return rainWet; } };

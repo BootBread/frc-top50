@@ -3,6 +3,27 @@
 // Stars: 1 is always "finish the level". Levels not listed use DEFAULT_STARS (one star per bonus job).
 export const DEFAULT_STARS = ["Finish the job", "Do one bonus job", "Do both bonus jobs"];
 export const LEVELS = {
+  fire: {
+    stars: ["Get through the fire", "Save at least 80% of the farm", "Save all of it"],
+    savedStar: 0.8,
+    spread: 0.08,                  // chance per second a burning cell lights a downwind neighbour (less sideways, little upwind)
+    burnTime: 16,                  // seconds a grass cell burns (trees three times as long)
+    ember: 0.06,                   // chance per second a burning tree throws an ember ahead of the fire
+    maxFire: 720,                  // seconds after it starts that the fire is called out regardless
+  },
+  night: {
+    stars: ["Deliver the topsoil", "Never set off the alarm", "Do it in under 15:00"],
+    targetTime: 900,
+    spotRate: 0.35,                // spotted meter per second inside a cone (doubled with your headlights on)
+    spotDecay: 0.25,               // ... and how fast it empties outside
+    loud: 0.6,                     // winching a fence panel down adds this much at once
+    alarmTime: 8,                  // seconds after an alarm before you can be spotted again
+    panelPull: 20000,              // N to winch a fence panel down
+  },
+  sands: {
+    stars: ["Seal the pit", "Get swallowed no more than twice", "Never get swallowed"],
+    swallowStar: 2,
+  },
   treasure: {
     stars: ["Find the treasure", "Get it home in under 20:00", "Never dig up a decoy"],
     targetTime: 1200,
