@@ -51,6 +51,36 @@
   #start button.alt { background: rgba(255,255,255,.16); color: #fff; }
   #start button:disabled { opacity: .5; cursor: default; }
   #msg { min-height: 1.5em; color: #ffb4a8; }
+  .stars { color: #ffc928; letter-spacing: .06em; }
+  #banner .stars { display: block; font-size: 34px; margin: 2px 0 6px; }
+  #tasks .star { font-size: 12px; }
+  #tasks .pct { color: #ffc928; font-size: 12px; }
+  #tasks .meter { margin-top: 8px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.15); }
+  #tasks .mrow { display: flex; align-items: center; gap: 8px; font-size: 12px; }
+  #tasks .mrow span:first-child { width: 112px; color: #c9d1da; }
+  #tasks .mrow b { width: 52px; text-align: right; font-weight: 600; }
+  #tasks .mbar { flex: 1; height: 8px; border-radius: 4px; background: rgba(255,255,255,.14); overflow: hidden; min-width: 70px; }
+  #tasks .mbar i { display: block; height: 100%; border-radius: 4px; }
+  #tasks .ok { color: #8be28b; font-weight: 600; }
+  #tasks .lstrip { display: flex; gap: 2px; margin: 3px 0; }
+  #tasks .lstrip i { flex: 1; height: 10px; border-radius: 2px; }
+  #legend { bottom: 76px; left: 14px; display: none; font-size: 13px; max-width: 46vw; }
+  #legend i { display: inline-block; width: 11px; height: 11px; border-radius: 3px; margin: 0 4px 0 8px; vertical-align: -1px; }
+  /* character pop-ups: portrait bottom-right, name pill on top, speech box reaching left */
+  #talk { position: fixed; right: 14px; bottom: 14px; display: flex; align-items: flex-end; pointer-events: none; z-index: 5;
+    transform: translateY(150%); opacity: 0; transition: transform .35s ease, opacity .35s ease; }
+  #talk.on { transform: none; opacity: 1; }
+  #talk .box { position: relative; background: rgba(20, 24, 30, .82); backdrop-filter: blur(4px); border-radius: 18px; padding: 14px 72px 22px 20px; margin: 0 -58px 10px 0;
+    width: min(600px, calc(100vw - 170px)); min-height: 52px; font-size: 17px; line-height: 1.4; box-sizing: border-box; }
+  #talk .skip { position: absolute; right: 66px; bottom: 5px; font-size: 11px; color: #aab3be; }
+  #talk .skip kbd { background: rgba(255,255,255,.16); border-radius: 4px; padding: 0 5px; font-family: inherit; font-size: 10px; }
+  #talk .face { position: relative; width: 112px; height: 112px; flex: none; }
+  #talk canvas { width: 112px; height: 112px; border-radius: 50%; border: 4px solid rgba(20,24,30,.85); box-sizing: border-box; display: block; }
+  #talk .name { position: absolute; left: 50%; top: -15px; transform: translateX(-50%); white-space: nowrap; padding: 3px 12px; border-radius: 999px;
+    font-weight: 700; font-size: 13px; color: #1b1f24; background: #ffc928; box-shadow: 0 2px 6px rgba(0,0,0,.3); }
+  body.talking #help { opacity: 0; transition: opacity .3s; }
+  body.talking #fill { bottom: 156px; } body.talking #prompt { bottom: 220px; }
+  @media (max-width: 1000px) { body.talking #gauges, body.talking #legend { opacity: 0; } }
 </style>
 <script type="importmap">
 { "imports": {
@@ -68,8 +98,9 @@
   <kbd>&uarr;</kbd><kbd>&darr;</kbd> raise / lower arms (lower into the ground to dig)<br>
   <kbd>&larr;</kbd><kbd>&rarr;</kbd> curl / dump bucket (truck: lower / raise bed)<br>
   <kbd>E</kbd> winch hook / unhook &nbsp; <kbd>Q</kbd><kbd>X</kbd> reel in / out<br>
-  <kbd>F</kbd> switch vehicle (garage or purple yard) &nbsp; <kbd>G</kbd> paint shop (garage)<br>
+  <kbd>F</kbd> switch vehicle (garage or purple yard) &nbsp; <kbd>G</kbd> paint shop (garage or pink shop)<br>
   <kbd>R</kbd> reset &nbsp; <kbd>C</kbd> recenter camera &nbsp; <kbd>H</kbd> hints &nbsp; <kbd>P</kbd> unlock all (testing)<br>
+  <kbd>O</kbd> ground overlay (grade / packing) &nbsp; <kbd>Enter</kbd> skip a speech line<br>
   Drag mouse to look, wheel to zoom
 </div>
 <div id="fill" class="panel"><span id="filltext">Bucket 0%</span><div class="track"><div id="fillbar"></div></div></div>
@@ -77,6 +108,7 @@
 <div id="prompt" class="panel"></div>
 <div id="banner" class="panel"></div>
 <div id="custom" class="panel"></div>
+<div id="legend" class="panel"></div>
 <div id="start" class="panel">
   <h1>Job Site</h1>
   <p>Wheel loaders with winches. Meet your crew in the quarry, then drive into a job house to start a level.</p>

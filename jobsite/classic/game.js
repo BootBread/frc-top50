@@ -1,0 +1,2639 @@
+// Job Site: wheel loaders with rear winches on diggable job sites, solo or with up to 3 friends.
+// The page builds one site, picked by ?site= : the quarry hub (where everyone spawns) or a level.
+// Moving between sites reloads the page; in a room the server tells everyone to move together.
+import * as THREE from "three";
+import RAPIER from "rapier";
+
+await RAPIER.init();
+
+const params = new URLSearchParams(location.search);
+const SITE = ["farm", "river", "ridge", "haul", "flood"].includes(params.get("site")) ? params.get("site") : "hub";
+const SEED = { hub: 20261116, farm: 20261117, river: 20261118, ridge: 20261119, haul: 20261120, flood: 20261121 }[SITE];
+const TITLES = { farm: "Muddle Acres", river: "Rapid River", ridge: "Ridge Road", haul: "Gravel Run", flood: "Flood Season" };
+const LEVEL_NUM = { farm: 1, river: 2, ridge: 3, haul: 4, flood: 5 };
+const DT = 1 / 60;
+const LOCAL = ["localhost", "127.0.0.1"].includes(location.hostname);
+const SERVER = LOCAL ? "ws://localhost:8788" : "wss://jobsite-rooms.frctop50.workers.dev";
+const SYNC_VER = 3;
+
+// ---------- helpers ----------
+function mulberry32(a) {
+  return () => {
+    a |= 0; a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(SEED);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const smooth = (a, b, v) => { const t = clamp((v - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+const r3 = (v) => Math.round(v * 1000) / 1000;
+const esc = (s) => String(s).replace(/[<&>"]/g, "");
+function hash2(x, z) {
+  let h = Math.imul(x, 374761393) ^ Math.imul(z, 668265263) ^ SEED;
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function noise(x, z) {
+  const xi = Math.floor(x), zi = Math.floor(z), tx = x - xi, tz = z - zi;
+  const sx = tx * tx * (3 - 2 * tx), sz = tz * tz * (3 - 2 * tz);
+  return lerp(lerp(hash2(xi, zi), hash2(xi + 1, zi), sx), lerp(hash2(xi, zi + 1), hash2(xi + 1, zi + 1), sx), sz);
+}
+
+// ---------- site layouts ----------
+const HUB = {
+  spawn: { x: 0, z: 0, yaw: Math.PI },
+  houses: [
+    { id: "farm", title: "1 · Muddle Acres", x: -36, z: -44 },
+    { id: "river", title: "2 · Rapid River", x: -12, z: -44, needs: "farm" },
+    { id: "ridge", title: "3 · Ridge Road", x: 12, z: -44, needs: "river" },
+    { id: "haul", title: "4 · Gravel Run", x: -62, z: -44, needs: "ridge" },
+    { id: "flood", title: "5 · Flood Season", x: -62, z: -18, needs: "haul" },
+    { id: "garage", title: "Garage", x: 46, z: -46, garage: true },
+    { id: "paint", title: "Paint Shop", x: 69, z: -46, paint: true },
+  ],
+  mound: { x: 20, z: -12, r: 7, h: 3.2 },
+  field: { x: -40, z: 34, r: 24 },
+};
+const FARM = {
+  spawn: { x: 0, z: -72, yaw: 0 },
+  sink: { x: 0, z: -8, r: 5.5, depth: 2.0 },
+  bank: { x: -48, z: -4, r: 12, h: 4.5 },
+  paddock: { x0: -66, x1: -30, z0: -30, z1: 22, gate: -4, gateW: 9 },
+  pile: { x: -16, z: 26, r: 6.5 },
+  hill: { x: 46, z: 52, top: 15, foot: 30, h: 10 },
+  post: { x: 40, z: 41 },
+  barn: { x: 46, z: 57, w: 13, d: 11, h: 7.5, door: 6.5, dh: 5 },
+  stream: { z: -44, w: 4.5, depth: 1.1, fordW: 6 },
+  stump: { x: 22, z: 14 },
+  tractor: { x: 26, z: -44 },
+  logs: [[-25.5, -4, 12, 0.5, 0.15], [-22.5, -10, 8, 0.36, -0.35], [-21.5, 1.5, 8.5, 0.36, 0.4], [-27, 6, 7.5, 0.34, 1.2]],   // x, z, length, radius, yaw
+  trees: [[-12, -51], [11, -37], [33, -36], [18, -52], [-30, -37], [40, -50], [-8, 14], [16, 30], [-40, 30], [28, 4]],
+};
+
+const RIVER = {
+  spawn: { x: 0, z: -70, yaw: 0 },
+  mid: 5, water: -0.55,                                         // the river runs east-west across the middle
+  ford: { x: 0, w: 12 },                                        // the shallows, where a causeway is practical
+  bank: { x: -24, z: -22, r: 12, h: 4.2 },                      // loose dirt to build it with
+  swamp: { z0: 30, z1: 56 },                                    // a boggy belt right across the far side
+  depot: { x: -16, z: -58, r: 6.5 },
+  crate: { x: 6, z: 68 },
+  tool: { x: -58, z: 74 },
+  rocks: [[-14, 20, 1.0], [10, 22, 0.9], [22, 19, 1.1], [-26, 24, 0.95], [4, 25, 1.05], [-6, 18, 0.9], [32, 24, 1.0], [-38, 20, 1.1], [16, 26, 0.95]],
+  trees: [[40, -30], [-46, -40], [30, -56], [-40, -8], [36, -6], [-20, 34], [18, 42], [-34, 50], [36, 36], [0, 60], [-22, 62], [28, 62], [-64, 64], [50, 70]],
+};
+// how deep and how wide the river is at x: shallow and narrow at the ford, deep and wide elsewhere
+function riverAt(x) { const sh = smooth(RIVER.ford.w + 8, RIVER.ford.w, Math.abs(x - RIVER.ford.x)); return { depth: lerp(3.4, 1.5, sh), half: lerp(8.5, 5, sh) }; }
+function riverDesign(x, z) {
+  const R = RIVER;
+  let h = (noise(x / 44, z / 44) - 0.5) * 4 + (noise(x / 14 + 3, z / 14) - 0.5) * 1.2 + (noise(x / 5, z / 5) - 0.5) * 0.25 + 0.6;
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  const flat = (cx, cz, r, level) => { h = lerp(h, level, smooth(r + 10, r, Math.hypot(x - cx, z - cz))); };
+  flat(R.spawn.x, R.spawn.z, 12, 0.3); flat(R.depot.x, R.depot.z, 8, 0.3); flat(R.bank.x, R.bank.z, R.bank.r + 2, 0.3);
+  flat(R.crate.x, R.crate.z, 9, 0.4); flat(R.tool.x, R.tool.z, 6, 0.4);
+  h = lerp(h, 0.3, smooth(9, 4, Math.abs(x)) * smooth(-72, -64, z) * smooth(74, 66, z));        // the road
+  const inSwamp = smooth(R.swamp.z0 - 3, R.swamp.z0 + 1, z) * smooth(R.swamp.z1 + 3, R.swamp.z1 - 1, z);
+  h = lerp(h, 0.05, inSwamp);
+  const rv = riverAt(x), dz = Math.abs(z - R.mid);
+  h = lerp(h, 0.3, smooth(rv.half + 12, rv.half + 3, dz));                                       // level banks
+  h -= rv.depth * smooth(rv.half + 1, rv.half - 2.5, dz);
+  const B = R.bank, loose = B.h * Math.max(0, 1 - (Math.hypot(x - B.x, z - B.z) / B.r) ** 1.6);
+  return { h: h + loose, loose, mud: 2 * inSwamp };
+}
+
+// ----- level 3: Ridge Road. One road climbs a ridge in a cutting: a landslide blocks it, a gully has
+// washed it out, and the last pitch is too steep to drive. The cabin has to reach the summit.
+const RIDGE = {
+  spawn: { x: 0, z: -76, yaw: 0 },
+  cabin: { x: 11, z: -62 }, wood: { x: -12, z: -64 },
+  slide: { z: -15, len: 5, h: 3.6 },
+  gully: { z0: 4, z1: 9, depth: 2.7 },
+  stage: { z0: 38, z1: 46 }, pitch: { z0: 46, z1: 59 }, top: 22,
+  post: { x: 4.5, z: 64 }, pad: { x: 0, z: 78, r: 7 },
+  rocks: [[-2, -17, 1.1], [2.5, -13.5, 1.0], [0.5, -19, 1.15], [-3, -12, 1.0]],
+  trees: [[-20, -70], [22, -68], [-32, -52], [30, -50], [-14, -44], [16, -42], [-15, 66], [17, 68], [-22, 82], [24, 84], [-40, 70], [42, 72]],
+};
+function ridgeRoad(z) {
+  const R = RIDGE;
+  if (z < -30) return 0.3;
+  if (z < 0) return lerp(0.3, 6, (z + 30) / 30);
+  if (z < 18) return 6;
+  if (z < R.stage.z0) return lerp(6, 12, (z - 18) / (R.stage.z0 - 18));
+  if (z < R.pitch.z0) return 12;
+  // the climb is straight for most of its length, then rounds over onto the summit so loads don't snag on a sharp lip
+  const t = (z - R.pitch.z0) / (R.pitch.z1 - R.pitch.z0);
+  if (t < 0.8) return lerp(12, R.top, t);
+  if (t < 1.2) { const u = (t - 0.8) / 0.4; return lerp(12, R.top, 0.8 + (u - (u * u) / 2) * 0.4); }
+  return R.top;
+}
+function ridgeDesign(x, z) {
+  const R = RIDGE, ax = Math.abs(x);
+  let valley = (noise(x / 40, z / 40) - 0.5) * 2.5 + (noise(x / 12 + 3, z / 12) - 0.5) * 0.8 + 0.5;
+  const flat = (cx, cz, r, level) => { valley = lerp(valley, level, smooth(r + 10, r, Math.hypot(x - cx, z - cz))); };
+  flat(R.spawn.x, R.spawn.z, 14, 0.3); flat(R.cabin.x, R.cabin.z, 7, 0.3); flat(R.wood.x, R.wood.z, 5, 0.3);
+  valley = lerp(valley, 0.3, smooth(9, 4, ax) * smooth(-84, -76, z));                             // the road in
+  const summit = smooth(R.pitch.z1 - 1, R.pitch.z1 + 4, z);
+  const hill = ridgeRoad(z) + 11 * smooth(5, 8.5, ax) * (1 - summit) + (noise(x / 9, z / 9) - 0.5) * 1.2 * smooth(8, 14, ax);
+  let h = lerp(valley, hill, smooth(-38, -30, z));
+  h += smooth(78, 94, Math.max(ax, Math.abs(z))) * 12;
+  const G2 = R.gully;                                                                              // the washed-out gap
+  h -= G2.depth * smooth(G2.z0 - 1.5, G2.z0 + 1, z) * smooth(G2.z1 + 1.5, G2.z1 - 1, z) * smooth(10, 7, ax);
+  const S = R.slide, loose = S.h * Math.max(0, 1 - Math.abs(z - S.z) / S.len) * smooth(8.5, 6, ax);
+  const wall = smooth(-31, -27, z) * smooth(R.pitch.z1 - 1, R.pitch.z1 - 4, z) * smooth(4.7, 5.2, ax);
+  return { h: h + loose, loose, mud: 0, rock: wall > 0.5 ? 1 : 0 };      // the cutting walls are bedrock: no digging through them
+}
+
+// ----- level 4: Gravel Run. A campsite in the valley needs a gravel pad; the gravel is in a pit on a
+// plateau, up a switchback road cut into a steep hillside, beyond a boggy stream.
+const HAUL = {
+  spawn: { x: -22, z: -76, yaw: 0 },
+  pad: { x: 22, z: -58, w: 28, d: 18 },
+  stream: { z: -28, w: 3.5 },
+  road: [[8, -60, 0.3], [-40, -60, 0.3], [-40, 10, 0.3], [46, 15, 2.0], [46, 22, 3.4], [-34, 27, 7.6], [-34, 40, 9], [-34, 52, 9]],
+  hillZ0: 14, hillZ1: 30, top: 9,
+  pit: { x: -34, z: 66, r: 13, h: 4 },
+  hopper: { x: -12, z: 58 }, bay: { x: -12, z: 46, r: 3.2 },
+  block: { log: [-34, 41, 9, 0.42, 1.45], rocks: [[-30.5, 45, 1.0], [-37.5, 47, 1.05]] },
+  fordRocks: [[-48, -38, 1.0], [-30, -40, 0.95], [-44, -45, 1.05], [-34, -36, 0.9], [-52, -42, 1.0]],
+  picnic: { x: -24, z: 70 },
+  hairpin: { x0: 41, x1: 51, z0: 12, z1: 25 },
+  trees: [[-60, -50], [50, -72], [62, -30], [-64, 0], [66, 4], [-62, 72], [12, 76], [44, 62], [-6, -42], [56, -46], [20, -20], [-20, -12]],
+  yards: [{ x: -40, z: -76, r: 5.5 }, { x: -2, z: 70, r: 5.5 }],
+};
+function roadInfo(pts, x, z) {
+  let best = 1e9, hh = 0;
+  for (let k = 0; k + 1 < pts.length; k++) {
+    const [ax, az, ah] = pts[k], [bx, bz, bh] = pts[k + 1], dx = bx - ax, dz = bz - az;
+    const t = clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz), 0, 1), d = Math.hypot(x - ax - dx * t, z - az - dz * t);
+    if (d < best) { best = d; hh = lerp(ah, bh, t); }
+  }
+  return { d: best, h: hh };
+}
+function haulDesign(x, z) {
+  const H = HAUL;
+  let h = (noise(x / 40, z / 40) - 0.5) * 2.4 + (noise(x / 12 + 3, z / 12) - 0.5) * 0.8 + 0.4;
+  h += H.top * smooth(H.hillZ0, H.hillZ1, z);                                                    // the steep hillside
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  const P = H.pad, out = Math.max(Math.abs(x - P.x) - P.w / 2, Math.abs(z - P.z) - P.d / 2);
+  h = lerp(h, 0.3, smooth(7, 0, out));
+  const r = roadInfo(H.road, x, z);
+  h = lerp(h, r.h, smooth(5.6, 3.2, r.d));
+  const S = H.stream, ds = Math.abs(z - S.z);
+  h = lerp(h, 0.1, smooth(S.w + 7, S.w + 2, ds));
+  const Pt = H.pit, loose = Pt.h * Math.max(0, 1 - (Math.hypot(x - Pt.x, z - Pt.z) / Pt.r) ** 1.6);
+  return { h: h + loose, loose, mud: 1.9 * smooth(S.w + 1.5, S.w - 0.5, ds), grav: loose };
+}
+
+// ----- level 5: Flood Season. A river rises behind an old levee with three breaches and an open floodgate.
+const FLOOD = {
+  spawn: { x: 0, z: -62, yaw: 0 },
+  levee: { z: 22, crest: 2.6 },
+  breaches: [{ x: -50, w: 3, floor: 1.3, name: "west breach" }, { x: -8, w: 4, floor: 0.8, name: "middle breach" }, { x: 40, w: 3, floor: 1.4, name: "east breach" }],
+  gate: { x: 20, w: 4 }, gateProp: { x: 28, z: 4 },
+  borrow: [{ x: -30, z: -4, r: 11, h: 4.2 }, { x: 56, z: -6, r: 10, h: 4.2 }],
+  cars: [[-30, 29, 0x3b8fe0], [10, 30.5, 0xd8333a]],
+  safeZ: 12,
+  homes: [[-40, -30, 1], [-14, -38, 1], [14, -30, 1], [42, -38, 1], [-62, -52, 1], [62, -50, 1]],
+  water: { start: -1.2, peak: 2.0, riseSolo: 1440, hold: 40, grace: 45 },
+  trees: [[-70, -20], [70, -20], [-26, -50], [30, -58], [0, -30], [-72, 8], [74, 8]],
+  yards: [{ x: 24, z: -64, r: 5.5 }, { x: 4, z: -8, r: 5.5 }],
+};
+function floodDesign(x, z) {
+  const F = FLOOD, L2 = F.levee;
+  let h = (noise(x / 36, z / 36) - 0.5) * 1.2 + (noise(x / 10 + 3, z / 10) - 0.5) * 0.4 + 0.3;
+  h = lerp(h, 0.0, smooth(18, 26, z));                                                           // floodplain
+  h -= 2.6 * smooth(30, 38, z);                                                                   // river channel
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;
+  const dzl = Math.abs(z - L2.z), shape = smooth(4.3, 0.75, dzl);
+  let crest = L2.crest;
+  for (const b of F.breaches) crest = lerp(crest, Math.min(crest, b.floor), smooth(b.w / 2 + 1.6, b.w / 2, Math.abs(x - b.x)));
+  if (Math.abs(x - F.gate.x) < F.gate.w / 2 + 0.9) crest = 0;                                      // the floodgate slot
+  h += crest * shape;
+  let loose = 0;
+  for (const B of F.borrow) loose += B.h * Math.max(0, 1 - (Math.hypot(x - B.x, z - B.z) / B.r) ** 1.6);
+  return { h: h + loose, loose, mud: 0 };
+}
+
+function hubDesign(x, z) {
+  let h = (noise(x / 46, z / 46) - 0.5) * 9 + (noise(x / 17 + 9, z / 17 + 4) - 0.5) * 2.6 + (noise(x / 6, z / 6) - 0.5) * 0.5;
+  h += smooth(74, 94, Math.max(Math.abs(x), Math.abs(z))) * 16;                       // quarry walls
+  const flat = (cx, cz, r, level) => { h = lerp(h, level, smooth(r + 12, r, Math.hypot(x - cx, z - cz))); };
+  flat(0, 0, 14, 0);
+  for (const hs of HUB.houses) flat(hs.x, hs.z, hs.garage ? 20 : 10, 0);
+  h = lerp(h, 0, smooth(80, 74, x) * smooth(-64, -56, z) * smooth(-28, -36, z));        // room for the paint shop in the corner
+  h = lerp(h, 0, smooth(58, 48, Math.abs(x)) * smooth(-62, -52, z) * smooth(6, -2, z));  // the yard in front of the houses
+  const M = HUB.mound, loose = M.h * Math.max(0, 1 - Math.hypot(x - M.x, z - M.z) / M.r);
+  return { h: h + loose, loose, mud: 0 };
+}
+
+function farmDesign(x, z, noSink = false) {
+  const F = FARM;
+  let h = (noise(x / 50, z / 50) - 0.5) * 5 + (noise(x / 15 + 3, z / 15) - 0.5) * 1.2 + (noise(x / 5, z / 5) - 0.5) * 0.25;
+  h += smooth(78, 94, Math.max(Math.abs(x), Math.abs(z))) * 12;                       // valley sides
+  const flat = (cx, cz, r, level) => { h = lerp(h, level, smooth(r + 10, r, Math.hypot(x - cx, z - cz))); };
+  flat(F.sink.x, F.sink.z, 14, 0);
+  flat(F.pile.x, F.pile.z, 8, 0);
+  flat(F.hill.x, F.hill.z, F.hill.foot + 4, 0.3);
+  h = lerp(h, 0, smooth(10, 4, Math.abs(x)) * smooth(-6, -14, z));                     // farm lane
+  const P = F.paddock, inP = Math.min(x - P.x0, P.x1 - x, z - P.z0, P.z1 - z);
+  h = lerp(h, 0.2, smooth(-8, 2, inP));
+  const S = F.stream, ds = Math.abs(z - S.z);
+  h = lerp(h, 0, smooth(S.w + 10, S.w + 3, ds));
+  const depth = lerp(S.depth, 0.45, smooth(S.fordW + 3, S.fordW, Math.abs(x)));        // shallow ford where the lane crosses
+  h -= depth * smooth(S.w + 2.5, S.w * 0.4, ds);
+  const H = F.hill;
+  h += H.h * smooth(H.foot, H.top, Math.hypot(x - H.x, z - H.z));
+  if (!noSink) h -= F.sink.depth * smooth(F.sink.r, F.sink.r * 0.35, Math.hypot(x - F.sink.x, z - F.sink.z));
+  const B = F.bank, loose = B.h * Math.max(0, 1 - (Math.hypot(x - B.x, z - B.z) / B.r) ** 1.6);
+  return { h: h + loose, loose, mud: smooth(S.w + 3.5, S.w + 0.5, ds) };
+}
+
+// ---------- terrain grid ----------
+const G = 384, CELL = 0.5, SIZE = G * CELL, HALF = SIZE / 2, CH = 32, NC = G / CH, W = G + 1;
+const BEDROCK = 5;                            // how far below the original ground you can dig
+const design = { hub: hubDesign, farm: farmDesign, river: riverDesign, ridge: ridgeDesign, haul: haulDesign, flood: floodDesign }[SITE];
+// heights[zi + xi * W]: rows along z, columns along x, the layout Rapier's heightfield wants.
+// firm[i] is the top of undisturbed ground: anything above it is loose dirt.
+const heights = new Float32Array(W * W), base = new Float32Array(W * W), firm = new Float32Array(W * W),
+  loose = new Uint8Array(W * W), mudA = new Float32Array(W * W), gravH = new Float32Array(W * W), rockA = new Uint8Array(W * W);   // gravH: thickness of gravel lying on top
+const sinkIdx = [], sinkTarget = [];
+for (let xi = 0; xi <= G; xi++) for (let zi = 0; zi <= G; zi++) {
+  const x = xi * CELL - HALF, z = zi * CELL - HALF, i = zi + xi * W, d = design(x, z);
+  heights[i] = base[i] = d.h; firm[i] = d.h - d.loose; loose[i] = d.loose > 0.02 ? 1 : 0; mudA[i] = d.mud; rockA[i] = d.rock ? 1 : 0; if (d.grav) gravH[i] = d.grav;
+  if (SITE === "farm" && Math.hypot(x - FARM.sink.x, z - FARM.sink.z) < FARM.sink.r) { sinkIdx.push(i); sinkTarget.push(farmDesign(x, z, true).h - 0.1); }
+}
+function sample(arr, x, z) {
+  const fx = clamp((x + HALF) / CELL, 0, G - 1e-4), fz = clamp((z + HALF) / CELL, 0, G - 1e-4);
+  const xi = Math.floor(fx), zi = Math.floor(fz), tx = fx - xi, tz = fz - zi, i = zi + xi * W;
+  return lerp(lerp(arr[i], arr[i + W], tx), lerp(arr[i + 1], arr[i + W + 1], tx), tz);
+}
+const heightAt = (x, z) => sample(heights, x, z);
+// a layer of gravel makes mud firm
+const mudAt = (x, z) => sample(mudA, x, z) * (1 - smooth(0.03, 0.12, sample(gravH, x, z)));
+function slopeAt(x, z) {
+  const gx = (heightAt(x + 0.75, z) - heightAt(x - 0.75, z)) / 1.5, gz = (heightAt(x, z + 0.75) - heightAt(x, z - 0.75)) / 1.5;
+  return Math.atan(Math.hypot(gx, gz));
+}
+
+// ---------- renderer ----------
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+
+const scene = new THREE.Scene();
+const SKY = 0x9fc4e0;
+scene.background = new THREE.Color(SKY);
+scene.fog = new THREE.Fog(SKY, 100, 280);
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.3, 500);
+scene.add(new THREE.HemisphereLight(0xdcecff, 0x7a6a4f, 1.15));
+const sun = new THREE.DirectionalLight(0xfff2d6, 2.1);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -50, right: 50, top: 50, bottom: -50, near: 1, far: 240 });
+sun.shadow.bias = -0.0006;
+sun.shadow.normalBias = 0.06;
+scene.add(sun, sun.target);
+const SUN_DIR = new THREE.Vector3(0.55, 1, 0.35).normalize();
+addEventListener("resize", () => {
+  camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+const lam = (color, flat = false) => new THREE.MeshLambertMaterial({ color, flatShading: flat });
+
+// ---------- physics world ----------
+const world = new RAPIER.World({ x: 0, y: -9.81, z: 0 });
+world.timestep = DT;
+for (const [x, z, hx, hz] of [[HALF - 3, 0, 1, HALF], [-HALF + 3, 0, 1, HALF], [0, HALF - 3, HALF, 1], [0, -HALF + 3, HALF, 1]]) {
+  world.createCollider(RAPIER.ColliderDesc.cuboid(hx, 40, hz).setTranslation(x, 20, z));   // invisible fence
+}
+const props = [];          // everything loose: rocks, boulders, logs, the stump, the tractor
+const anchors = [];        // fixed things a winch can hook: trees, winch posts
+
+// ---------- terrain: chunks with their own collider and mesh so edits stay cheap ----------
+const groundMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+const cDirt = new THREE.Color(0xb08a58), cSand = new THREE.Color(0xd2b77c), cGrass = new THREE.Color(0x7fa653), cGrass2 = new THREE.Color(0x6d9a48),
+  cRock = new THREE.Color(0x8d8a85), cLoose = new THREE.Color(0x8a6238), cMud = new THREE.Color(0x4f3a26), cGravel = new THREE.Color(0xa9a8a2), _c = new THREE.Color();
+function groundColor(wx, wz, hm, steep) {
+  if (SITE === "hub") {
+    _c.copy(cDirt).lerp(cSand, smooth(0.35, 0.75, noise(wx / 23 + 40, wz / 23)));
+    _c.lerp(cGrass, smooth(1.6, 3.4, hm + (noise(wx / 9, wz / 9 + 7) - 0.5) * 2));
+    _c.lerp(cRock, Math.max(smooth(0.75, 1.2, steep), smooth(8, 12, hm)));
+    return;
+  }
+  if (SITE === "haul") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    const P = HAUL.pad, out = Math.max(Math.abs(wx - P.x) - P.w / 2, Math.abs(wz - P.z) - P.d / 2);
+    _c.lerp(cDirt, Math.max(smooth(4.2, 3, roadInfo(HAUL.road, wx, wz).d), smooth(1, -0.5, out) * 0.8));
+    _c.lerp(cRock, smooth(0.8, 1.2, steep) * 0.8);
+    return;
+  }
+  if (SITE === "flood") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    _c.lerp(cSand, smooth(-0.3, -1.2, hm));
+    _c.lerp(cDirt, smooth(5.5, 3.8, Math.abs(wx)) * smooth(-80, -70, wz) * smooth(14, 8, wz));
+    return;
+  }
+  if (SITE === "ridge") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    _c.lerp(cDirt, smooth(5.5, 3.8, Math.abs(wx)) * smooth(-86, -80, wz) * smooth(72, 62, wz));
+    _c.lerp(cRock, Math.max(smooth(0.75, 1.15, steep) * 0.85, smooth(-34, -28, wz) * smooth(4.5, 8, Math.abs(wx)) * smooth(60, 54, wz) * 0.35));
+    return;
+  }
+  if (SITE === "river") {
+    _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+    _c.lerp(cDirt, smooth(5.5, 3.5, Math.abs(wx)) * smooth(-72, -66, wz) * smooth(70, 64, wz));
+    _c.lerp(cSand, smooth(-0.1, -0.9, hm));
+    _c.lerp(cRock, smooth(1.0, 1.6, steep) * 0.7);
+    return;
+  }
+  const F = FARM;
+  _c.copy(cGrass).lerp(cGrass2, noise(wx / 13 + 5, wz / 13));
+  let dirt = smooth(13, 10, Math.hypot(wx - F.sink.x, wz - F.sink.z));
+  if (wz < -10) dirt = Math.max(dirt, smooth(5, 3.5, Math.abs(wx)));
+  const P = F.paddock, inP = Math.min(wx - P.x0, P.x1 - wx, wz - P.z0, P.z1 - wz);
+  dirt = Math.max(dirt, smooth(-1, 1, inP) * 0.8);
+  _c.lerp(cDirt, dirt);
+  _c.lerp(cRock, smooth(1.0, 1.6, steep) * 0.7);
+}
+const chunks = [];
+const dirtyChunks = new Set();
+function buildCollider(c) {
+  if (c.collider) world.removeCollider(c.collider, false);
+  const hf = new Float32Array((CH + 1) * (CH + 1));
+  for (let lx = 0; lx <= CH; lx++) for (let lz = 0; lz <= CH; lz++) hf[lz + lx * (CH + 1)] = heights[c.z0 + lz + (c.x0 + lx) * W];
+  c.collider = world.createCollider(RAPIER.ColliderDesc.heightfield(CH, CH, hf, { x: CH * CELL, y: 1, z: CH * CELL })
+    .setTranslation((c.x0 + CH / 2) * CELL - HALF, 0, (c.z0 + CH / 2) * CELL - HALF).setFriction(0.9).setCollisionGroups(0x0001ffff));
+}
+function buildMesh(c) {
+  const pos = c.pos, col = c.col;
+  let o = 0;
+  const tri = (ax, az, bx, bz, cx, cz) => {
+    const ia = az + ax * W, ib = bz + bx * W, ic = cz + cx * W, ha = heights[ia], hb = heights[ib], hc = heights[ic];
+    const wx = ((ax + bx + cx) / 3) * CELL - HALF, wz = ((az + bz + cz) / 3) * CELL - HALF;
+    groundColor(wx, wz, (ha + hb + hc) / 3, (Math.max(ha, hb, hc) - Math.min(ha, hb, hc)) / CELL);
+    const l = loose[ia] + loose[ib] + loose[ic], gq = (gravH[ia] + gravH[ib] + gravH[ic]) / 3;
+    const m = ((mudA[ia] + mudA[ib] + mudA[ic]) / 3) * (1 - smooth(0.03, 0.12, gq));
+    if (l) _c.lerp(cLoose, 0.3 * l);
+    if (m > 0.05) _c.lerp(cMud, Math.min(1, m) * 0.85);
+    if (gq > 0.008) _c.lerp(cGravel, Math.min(1, gq / 0.06));
+    _c.multiplyScalar(0.93 + hash2(ax * 3 + bx, az * 5 + cz) * 0.14);
+    pos[o] = ax * CELL - HALF; pos[o + 1] = ha; pos[o + 2] = az * CELL - HALF;
+    pos[o + 3] = bx * CELL - HALF; pos[o + 4] = hb; pos[o + 5] = bz * CELL - HALF;
+    pos[o + 6] = cx * CELL - HALF; pos[o + 7] = hc; pos[o + 8] = cz * CELL - HALF;
+    for (let k = 0; k < 9; k += 3) { col[o + k] = _c.r; col[o + k + 1] = _c.g; col[o + k + 2] = _c.b; }
+    o += 9;
+  };
+  for (let x = c.x0; x < c.x0 + CH; x++) for (let z = c.z0; z < c.z0 + CH; z++) { tri(x, z, x, z + 1, x + 1, z); tri(x + 1, z, x, z + 1, x + 1, z + 1); }
+  c.geo.attributes.position.needsUpdate = true; c.geo.attributes.color.needsUpdate = true;
+  c.geo.computeVertexNormals(); c.geo.computeBoundingSphere();
+}
+for (let cx = 0; cx < NC; cx++) for (let cz = 0; cz < NC; cz++) {
+  const c = { x0: cx * CH, z0: cz * CH, collider: null, pos: new Float32Array(CH * CH * 18), col: new Float32Array(CH * CH * 18), geo: new THREE.BufferGeometry() };
+  c.geo.setAttribute("position", new THREE.BufferAttribute(c.pos, 3));
+  c.geo.setAttribute("color", new THREE.BufferAttribute(c.col, 3));
+  const mesh = new THREE.Mesh(c.geo, groundMat); mesh.receiveShadow = true; scene.add(mesh);
+  buildCollider(c); buildMesh(c);
+  chunks.push(c);
+}
+function markDirty(xi, zi) {
+  const a = clamp(Math.floor((xi - 1) / CH), 0, NC - 1), b = clamp(Math.floor(xi / CH), 0, NC - 1);
+  const c = clamp(Math.floor((zi - 1) / CH), 0, NC - 1), d = clamp(Math.floor(zi / CH), 0, NC - 1);
+  dirtyChunks.add(a * NC + c); dirtyChunks.add(a * NC + d); dirtyChunks.add(b * NC + c); dirtyChunks.add(b * NC + d);
+}
+const netEdits = new Map();          // vertex index -> height change made here since the last network send
+// Every terrain change goes through here. Returns the change actually applied (bedrock stops digging).
+// g is how much of an added amount is gravel. Taking ground away takes the gravel on top first:
+// lastG says how much gravel the last call removed.
+const netG = new Map();              // vertex index -> gravel thickness change made here since the last network send
+let lastG = 0;
+function addHeight(xi, zi, dh, mine = true, g = 0) {
+  lastG = 0;
+  if (xi < 1 || zi < 1 || xi >= G || zi >= G) return 0;
+  const i = zi + xi * W, h = Math.max(base[i] - BEDROCK, heights[i] + dh), d = h - heights[i];
+  if (d === 0) return 0;
+  heights[i] = h; loose[i] = 1; markDirty(xi, zi);
+  if (h < firm[i]) firm[i] = h;
+  if (mine) {
+    netEdits.set(i, (netEdits.get(i) || 0) + d);
+    let dg = 0;
+    if (d < 0) { dg = -Math.min(gravH[i], -d); lastG = -dg; } else if (g > 0) dg = Math.min(g, d);
+    if (dg) { gravH[i] = Math.max(0, gravH[i] + dg); netG.set(i, (netG.get(i) || 0) + dg); }
+  }
+  return d;
+}
+function flushTerrain() {
+  if (!dirtyChunks.size) return;
+  for (const k of dirtyChunks) {
+    const c = chunks[k]; buildCollider(c); buildMesh(c);
+    const x0 = c.x0 * CELL - HALF - 2, z0 = c.z0 * CELL - HALF - 2, x1 = x0 + CH * CELL + 4, z1 = z0 + CH * CELL + 4;
+    for (const r of props) { if (!r.active || !r.body.isDynamic()) continue; const p = r.body.translation(); if (p.x > x0 && p.x < x1 && p.z > z0 && p.z < z1) r.body.wakeUp(); }
+  }
+  dirtyChunks.clear();
+}
+
+// Loose dirt slumps to a gentle slope; undisturbed ground only collapses when cut nearly vertical.
+const active = { on: false, x0: 0, x1: 0, z0: 0, z1: 0, ttl: 0 };
+function touch(xi, zi) {
+  if (!active.on) Object.assign(active, { on: true, x0: xi, x1: xi, z0: zi, z1: zi });
+  else { active.x0 = Math.min(active.x0, xi); active.x1 = Math.max(active.x1, xi); active.z0 = Math.min(active.z0, zi); active.z1 = Math.max(active.z1, zi); }
+  active.ttl = 50;
+}
+// how steep loose dirt can stand: dirt tipped into the river spreads out flat, so a causeway ends up wide enough to drive on
+function looseSlope(i) { return SITE === "river" && Math.abs((i % W) * CELL - HALF - RIVER.mid) < 11 && heights[i] < 0.9 ? 0.36 : 0.62; }
+function relaxStep() {
+  if (!active.on) return;
+  if (--active.ttl <= 0) { active.on = false; return; }
+  const x0 = Math.max(1, active.x0 - 5), x1 = Math.min(G - 1, active.x1 + 5), z0 = Math.max(1, active.z0 - 5), z1 = Math.min(G - 1, active.z1 + 5);
+  let moved = false;
+  const pair = (xa, za, xb, zb) => {
+    const ia = za + xa * W, ib = zb + xb * W, d = heights[ia] - heights[ib], hi = d > 0 ? ia : ib;
+    if (rockA[hi] && heights[hi] - firm[hi] <= 0.03) return;                                    // bedrock never slumps
+    const over = Math.abs(d) - (heights[hi] - firm[hi] > 0.03 ? looseSlope(hi) : 1.5) * CELL;
+    if (over <= 0.01) return;
+    const took = -addHeight(d > 0 ? xa : xb, d > 0 ? za : zb, -over * 0.3), tookG = lastG;
+    if (took > 0) { addHeight(d > 0 ? xb : xa, d > 0 ? zb : za, took, true, tookG); moved = true; }
+  };
+  for (let it = 0; it < 2; it++) for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) { pair(x, z, x + 1, z); pair(x, z, x, z + 1); }
+  if (moved) active.ttl = 50;
+}
+
+// ---------- scenery and fixed things ----------
+const trunkGeo = new THREE.CylinderGeometry(0.25, 0.35, 2.2, 6), leafGeo = new THREE.ConeGeometry(1.7, 4.6, 7);
+const trunkMat = lam(0x6b4a2b), leafMat = lam(0x3f7d3a, true);
+function backdropTrees(count, r0, r1) {
+  const trunks = new THREE.InstancedMesh(trunkGeo, trunkMat, count), leaves = new THREE.InstancedMesh(leafGeo, leafMat, count), m = new THREE.Matrix4();
+  for (let i = 0; i < count; i++) {
+    const a = rng() * Math.PI * 2, d = r0 + rng() * (r1 - r0), x = clamp(Math.cos(a) * d * 1.3, -93, 93), z = clamp(Math.sin(a) * d * 1.3, -93, 93);
+    const y = heightAt(x, z), s = 0.8 + rng() * 0.7;
+    trunks.setMatrixAt(i, m.makeScale(s, s, s).setPosition(x, y + 1.1 * s, z));
+    leaves.setMatrixAt(i, m.makeScale(s, s, s).setPosition(x, y + 4.2 * s, z));
+  }
+  leaves.castShadow = true;
+  scene.add(trunks, leaves);
+}
+function addTree(x, z, s = 1.2) {
+  const y = heightAt(x, z), g = new THREE.Group(); g.position.set(x, y, z); scene.add(g);
+  const trunk = new THREE.Mesh(trunkGeo, trunkMat); trunk.scale.set(s * 1.3, s, s * 1.3); trunk.position.y = 1.1 * s; trunk.castShadow = true;
+  const leaf = new THREE.Mesh(leafGeo, leafMat); leaf.scale.setScalar(s); leaf.position.y = 4.2 * s; leaf.castShadow = true;
+  g.add(trunk, leaf);
+  world.createCollider(RAPIER.ColliderDesc.cylinder(1.6 * s, 0.42 * s).setTranslation(x, y + 1.5 * s, z));
+  anchors.push({ pos: new THREE.Vector3(x, y + 1.2, z), name: "tree" });
+}
+function addPost(x, z) {
+  const y = heightAt(x, z), g = new THREE.Group(); g.position.set(x, y, z); scene.add(g);
+  for (let k = 0; k < 4; k++) {
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.45, 10), lam(k % 2 ? 0x22262c : 0xffc928));
+    band.position.y = 0.25 + k * 0.45; band.castShadow = true; g.add(band);
+  }
+  const cap = new THREE.Mesh(new THREE.SphereGeometry(0.36, 10, 6), lam(0xd64528)); cap.position.y = 2.0; g.add(cap);
+  world.createCollider(RAPIER.ColliderDesc.cylinder(1.0, 0.34).setTranslation(x, y + 1.0, z));
+  anchors.push({ pos: new THREE.Vector3(x, y + 1.3, z), name: "winch post" });
+}
+function makeSign(w, h) {
+  const cv = document.createElement("canvas"); cv.width = 512; cv.height = 140;
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ map: tex }));
+  mesh.userData.draw = (title, sub, subColor = "#ffc928") => {
+    const g = cv.getContext("2d");
+    g.fillStyle = "#1d232b"; g.fillRect(0, 0, 512, 140);
+    g.strokeStyle = "#ffc928"; g.lineWidth = 8; g.strokeRect(4, 4, 504, 132);
+    g.textAlign = "center"; g.fillStyle = "#fff"; g.font = "bold 46px system-ui, sans-serif"; g.fillText(title, 256, 64);
+    g.fillStyle = subColor; g.font = "32px system-ui, sans-serif"; g.fillText(sub, 256, 114);
+    tex.needsUpdate = true;
+  };
+  return mesh;
+}
+// A shed with an open doorway. face 1 puts the door on the +z side, -1 on the -z side.
+const buildings = [];
+function building(o) {
+  const y0 = heightAt(o.x, o.z), s = o.face, t = 0.4, wall = lam(o.wall), roof = lam(o.roof, true);
+  const g = new THREE.Group(); g.position.set(o.x, y0, o.z); if (s < 0) g.rotation.y = Math.PI; scene.add(g);
+  const piece = (sx, sy, sz, lx, ly, lz, mat = wall) => {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat); m.position.set(lx, ly, lz); m.castShadow = m.receiveShadow = true; g.add(m);
+    world.createCollider(RAPIER.ColliderDesc.cuboid(sx / 2, sy / 2, sz / 2).setTranslation(o.x + lx * s, y0 + ly, o.z + lz * s));
+    return m;
+  };
+  const side = (o.w - o.door) / 2;
+  piece(o.w, o.h, t, 0, o.h / 2, -o.d / 2);
+  piece(t, o.h, o.d, -o.w / 2, o.h / 2, 0); piece(t, o.h, o.d, o.w / 2, o.h / 2, 0);
+  piece(side, o.h, t, -(o.w - side) / 2, o.h / 2, o.d / 2); piece(side, o.h, t, (o.w - side) / 2, o.h / 2, o.d / 2);
+  piece(o.door, o.h - o.dh, t, 0, o.dh + (o.h - o.dh) / 2, o.d / 2);
+  const shape = new THREE.Shape(); shape.moveTo(-o.d / 2 - 0.6, 0); shape.lineTo(0, o.d * 0.38); shape.lineTo(o.d / 2 + 0.6, 0);
+  const rg = new THREE.ExtrudeGeometry(shape, { depth: o.w + 1, bevelEnabled: false }).rotateY(Math.PI / 2).translate(-(o.w + 1) / 2, o.h, 0);
+  const rm = new THREE.Mesh(rg, roof); rm.castShadow = true; g.add(rm);
+  const trim = new THREE.Mesh(new THREE.BoxGeometry(o.door + 0.5, 0.3, 0.5), lam(0xf4f1ea)); trim.position.set(0, o.dh + 0.1, o.d / 2 + 0.05); g.add(trim);
+  const sign = makeSign(Math.min(o.w - 1, 8), 2.2); sign.position.set(0, o.dh + (o.h - o.dh) / 2 + 0.2, o.d / 2 + t / 2 + 0.03); g.add(sign);
+  const bld = {
+    group: g, sign, y0, roof: rm,
+    inside(x, z) { const lx = (x - o.x) * s, lz = (z - o.z) * s; return Math.abs(lx) < o.w / 2 - 1.2 && lz > -o.d / 2 + 1 && lz < o.d / 2 - 1; },
+  };
+  buildings.push(bld);
+  return bld;
+}
+function marker(x, z, r, color) {
+  const y = heightAt(x, z);
+  const ring = new THREE.Mesh(new THREE.RingGeometry(r - 0.35, r, 56), new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+  ring.rotation.x = -Math.PI / 2; ring.position.set(x, y + 0.1, z);
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.45, 60, 12, 1, true), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.22, depthWrite: false, side: THREE.DoubleSide }));
+  beam.position.set(x, y + 30, z);
+  scene.add(ring, beam);
+  return { ring, beam };
+}
+
+// ---------- props ----------
+const rockMats = [0x8f8b84, 0x7c7872, 0x9a9388, 0x86807a].map((c) => lam(c, true));
+function addProp(p) { Object.assign(p, { owner: 0, active: true, index: props.length }); props.push(p); return p; }
+function addRock(x, z, r, type = "rock") {
+  const g = new THREE.IcosahedronGeometry(1, 1), p = g.attributes.position, bumps = new Map(), pts = [];
+  const sq = [0.75 + rng() * 0.5, 0.6 + rng() * 0.35, 0.75 + rng() * 0.5];
+  const key = (i) => `${p.getX(i).toFixed(3)},${p.getY(i).toFixed(3)},${p.getZ(i).toFixed(3)}`;
+  for (let i = 0; i < p.count; i++) {
+    const k0 = key(i);
+    if (!bumps.has(k0)) bumps.set(k0, 0.78 + rng() * 0.42);
+    const k = bumps.get(k0) * r;
+    p.setXYZ(i, p.getX(i) * k * sq[0], p.getY(i) * k * sq[1], p.getZ(i) * k * sq[2]);
+  }
+  const seen = new Set();
+  for (let i = 0; i < p.count; i++) { const k0 = key(i); if (!seen.has(k0)) { seen.add(k0); pts.push(p.getX(i), p.getY(i), p.getZ(i)); } }
+  g.computeVertexNormals();
+  const mesh = new THREE.Mesh(g, rockMats[Math.floor(rng() * rockMats.length)]);
+  mesh.castShadow = mesh.receiveShadow = true; scene.add(mesh);
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, heightAt(x, z) + r * 0.8 + 0.2, z)
+    .setRotation(new THREE.Quaternion().setFromEuler(new THREE.Euler(rng() * 6, rng() * 6, rng() * 6))).setLinearDamping(0.15).setAngularDamping(0.6));
+  world.createCollider(RAPIER.ColliderDesc.convexHull(new Float32Array(pts)).setDensity(260).setFriction(0.85).setRestitution(0.05), body);
+  return addProp({ type, name: type === "boulder" ? "boulder" : "rock", body, mesh, r, x, z, anchorsLocal: [new THREE.Vector3()], damp: 0.15 });
+}
+const barkMat = lam(0x6e5034, true), cutMat = lam(0xd9b98a);
+const Q_Y_TO_Z = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+function addLog(x, z, len, rad, yaw) {
+  const mesh = new THREE.Mesh(new THREE.CylinderGeometry(rad, rad * 1.1, len, 9).rotateX(Math.PI / 2), barkMat);
+  mesh.castShadow = mesh.receiveShadow = true; scene.add(mesh);
+  for (const e of [1, -1]) {
+    const cap = new THREE.Mesh(new THREE.CircleGeometry(rad * (e > 0 ? 0.97 : 1.07), 9), cutMat);
+    cap.position.z = (e * len) / 2 + e * 0.01; if (e < 0) cap.rotation.y = Math.PI; mesh.add(cap);
+  }
+  for (let k = 0; k < 3; k++) {
+    const st = new THREE.Mesh(new THREE.CylinderGeometry(rad * 0.18, rad * 0.25, rad * 2.2, 5), barkMat);
+    st.position.set((rng() - 0.5) * rad, rad * 0.9, (rng() - 0.5) * len * 0.7); st.rotation.set((rng() - 0.5) * 1.2, 0, (rng() - 0.5) * 1.2); mesh.add(st);
+  }
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, heightAt(x, z) + rad + 0.1, z).setRotation(q).setLinearDamping(0.2).setAngularDamping(0.8));
+  world.createCollider(RAPIER.ColliderDesc.cylinder(len / 2, rad).setRotation(Q_Y_TO_Z).setDensity(230).setFriction(0.9), body);
+  return addProp({ type: "log", name: len > 10 ? "big fallen tree" : "fallen tree", body, mesh, r: rad, x, z, damp: 0.2,
+    anchorsLocal: [new THREE.Vector3(0, 0, len * 0.42), new THREE.Vector3(0, 0, -len * 0.42)] });
+}
+function addStump(x, z) {
+  const mesh = new THREE.Group(); scene.add(mesh);
+  const core = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 1.0, 1.2, 10), barkMat); core.castShadow = true; mesh.add(core);
+  const top = new THREE.Mesh(new THREE.CircleGeometry(0.84, 10), cutMat); top.rotation.x = -Math.PI / 2; top.position.y = 0.61; mesh.add(top);
+  for (let k = 0; k < 5; k++) {
+    const root = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.28, 1.6, 5), barkMat);
+    const a = (k / 5) * Math.PI * 2; root.position.set(Math.cos(a) * 1.0, -0.35, Math.sin(a) * 1.0); root.rotation.set(Math.sin(a) * 1.1, 0, -Math.cos(a) * 1.1); mesh.add(root);
+  }
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.fixed().setTranslation(x, heightAt(x, z) + 0.25, z));
+  world.createCollider(RAPIER.ColliderDesc.cylinder(0.6, 0.95).setDensity(500).setFriction(0.9), body);
+  return addProp({ type: "stump", name: "old stump", body, mesh, r: 1, x, z, damp: 0.3, anchorsLocal: [new THREE.Vector3(0, 0.3, 0)] });
+}
+function addTractor(x, z) {
+  const mesh = new THREE.Group(); scene.add(mesh);
+  const green = lam(0x3f8f3a), blk = lam(0x22262c);
+  const part = (geo, mat, px, py, pz) => { const m = new THREE.Mesh(geo, mat); m.position.set(px, py, pz); m.castShadow = true; mesh.add(m); return m; };
+  part(new THREE.BoxGeometry(1.4, 1.0, 3.2), green, 0, 0.1, 0.3);
+  part(new THREE.BoxGeometry(1.5, 1.4, 1.3), lam(0x9fd0e8), 0, 1.1, -0.6);
+  part(new THREE.BoxGeometry(1.6, 0.12, 1.5), green, 0, 1.85, -0.6);
+  for (const sx of [1, -1]) {
+    part(new THREE.CylinderGeometry(0.85, 0.85, 0.5, 14).rotateZ(Math.PI / 2), blk, sx * 1.0, -0.1, -0.7);
+    part(new THREE.CylinderGeometry(0.5, 0.5, 0.36, 12).rotateZ(Math.PI / 2), blk, sx * 0.85, -0.45, 1.45);
+  }
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, heightAt(x, z) + 1.0, z)
+    .setRotation(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), 1.2)).setLinearDamping(0.3).setAngularDamping(1.5));
+  world.createCollider(RAPIER.ColliderDesc.cuboid(0.95, 0.75, 1.8).setTranslation(0, 0.05, 0.2).setDensity(420).setFriction(0.4), body);   // about 4.3 t: too heavy to push out, fine for a winch
+  return addProp({ type: "tractor", name: "stuck tractor", body, mesh, r: 1.5, x, z, damp: 0.3, anchorsLocal: [new THREE.Vector3(0, 0, 1.9), new THREE.Vector3(0, 0, -1.6)] });
+}
+
+function addCrate(x, z, sx, sy, sz, color, name, density) {
+  const mesh = new THREE.Group(); scene.add(mesh);
+  const bodyM = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), lam(color)); bodyM.castShadow = bodyM.receiveShadow = true; mesh.add(bodyM);
+  for (const e of [1, -1]) { const band = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.08, 0.16, sz + 0.08), lam(0x22262c)); band.position.y = e * sy * 0.3; mesh.add(band); }
+  const skid = new THREE.Mesh(new THREE.BoxGeometry(sx + 0.3, 0.14, sz + 0.5), lam(0x6e5034)); skid.position.y = -sy / 2 - 0.05; skid.castShadow = true; mesh.add(skid);
+  const body = world.createRigidBody(RAPIER.RigidBodyDesc.dynamic().setTranslation(x, heightAt(x, z) + sy / 2 + 0.3, z).setLinearDamping(0.3).setAngularDamping(1.5));
+  world.createCollider(RAPIER.ColliderDesc.roundCuboid(sx / 2 - 0.25, sy / 2 + 0.06 - 0.25, sz / 2 - 0.25, 0.25).setDensity(density).setFriction(0.32).setFrictionCombineRule(RAPIER.CoefficientCombineRule.Min), body);   // crates slide on their skids: towable uphill, but they stay put on a gentle slope
+  return addProp({ type: "crate", name, body, mesh, r: Math.max(sx, sz) * 0.6, x, z, damp: 0.3,
+    anchorsLocal: [new THREE.Vector3(0, 0, sz / 2), new THREE.Vector3(0, 0, -sz / 2), new THREE.Vector3(sx / 2, 0, 0), new THREE.Vector3(-sx / 2, 0, 0)] });
+}
+
+// ---------- build the site ----------
+const houses = [];         // hub: level houses
+let barn = null, barnDoor = null, sinkMarker = null, pileMarker = null, barnBeam = null;
+const boulders = [], logs = [];
+let stump = null, tractor = null, activeBoulders = 0;
+
+if (SITE === "hub") {
+  backdropTrees(150, 80, 93);
+  for (const hs of HUB.houses) {
+    const b = hs.garage
+      ? building({ x: hs.x, z: hs.z, w: 30, d: 15, h: 7.5, door: 26, dh: 5.2, face: 1, wall: 0xc9ced6, roof: 0x7a54c7 })     // four bays wide
+      : hs.paint
+      ? building({ x: hs.x, z: hs.z, w: 13, d: 12, h: 7, door: 8, dh: 5.2, face: 1, wall: 0xf1ece4, roof: 0xd8467a })
+      : building({ x: hs.x, z: hs.z, w: 12, d: 10, h: 7, door: 6.5, dh: 4.8, face: 1, wall: hs.locked ? 0x9a9488 : 0xd9c39a, roof: hs.locked ? 0x5c6168 : hs.needs ? 0x2f6fb0 : 0xb4442e });
+    houses.push({ ...hs, b });
+    if (hs.paint) {
+      // paint booth: colour swatches on the back wall, a turntable pad and spray-can racks
+      const g = b.group, sw = [0xe23b3b, 0xf28c28, 0xf7d23e, 0x4caf50, 0x2f8fd8, 0x7a54c7, 0xe2e2e2, 0x222222];
+      sw.forEach((c, k) => { const m = new THREE.Mesh(new THREE.BoxGeometry(1.2, 2.4, 0.08), lam(c)); m.position.set(-4.9 + k * 1.4, 3.3, -5.75); g.add(m); });
+      const pad = new THREE.Mesh(new THREE.CylinderGeometry(4.2, 4.2, 0.06, 40), lam(0x3c3f46)); pad.position.set(0, 0.04, 0.3); g.add(pad);
+      const ring = new THREE.Mesh(new THREE.RingGeometry(4.0, 4.25, 48), new THREE.MeshBasicMaterial({ color: 0xff7ab0, side: THREE.DoubleSide }));
+      ring.rotation.x = -Math.PI / 2; ring.position.set(0, 0.09, 0.3); g.add(ring);
+      for (const sx of [-1, 1]) {
+        const shelf = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.08, 4), lam(0x8a6a44)); shelf.position.set(sx * 6.0, 1.6, -1.5); g.add(shelf);
+        for (let k = 0; k < 6; k++) {
+          const can = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.42, 10), lam(sw[(k + (sx > 0 ? 3 : 0)) % sw.length]));
+          can.position.set(sx * 6.0, 1.85, -3.1 + k * 0.62); g.add(can);
+        }
+      }
+    }
+  }
+  const F = HUB.field;
+  const sizes = [];
+  for (let i = 0; i < 26; i++) sizes.push(0.38 + rng() * 0.26);
+  for (let i = 0; i < 10; i++) sizes.push(0.7 + rng() * 0.25);
+  for (let i = 0; i < 4; i++) sizes.push(1.2 + rng() * 0.3);
+  for (const r of sizes) {
+    for (let tries = 0; tries < 60; tries++) {
+      const a = rng() * Math.PI * 2, d = Math.sqrt(rng()), x = F.x + Math.cos(a) * d * F.r, z = F.z + Math.sin(a) * d * F.r;
+      if (props.some((o) => Math.hypot(o.x - x, o.z - z) < o.r + r + 0.4)) continue;
+      addRock(x, z, r, r > 1.1 ? "boulder" : "rock");
+      break;
+    }
+  }
+} else if (SITE === "farm") {
+  const F = FARM;
+  backdropTrees(130, 82, 94);
+  for (const [x, z] of F.trees) addTree(x, z, 1.1 + rng() * 0.4);
+  addPost(F.post.x, F.post.z);
+  // paddock fence round the dirt bank, with a gate facing the yard
+  {
+    const P = F.paddock, rail = lam(0x8a6a44), y = 0.2;
+    const fence = (x0, z0, x1, z1) => {
+      const len = Math.hypot(x1 - x0, z1 - z0), cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, alongX = Math.abs(x1 - x0) > Math.abs(z1 - z0);
+      for (const ry of [0.55, 1.05]) {
+        const m = new THREE.Mesh(new THREE.BoxGeometry(alongX ? len : 0.12, 0.14, alongX ? 0.12 : len), rail);
+        m.position.set(cx, y + ry, cz); m.castShadow = true; scene.add(m);
+      }
+      const n = Math.max(2, Math.round(len / 3));
+      for (let k = 0; k <= n; k++) {
+        const pm = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.4, 0.2), rail);
+        pm.position.set(lerp(x0, x1, k / n), y + 0.6, lerp(z0, z1, k / n)); pm.castShadow = true; scene.add(pm);
+      }
+      world.createCollider(RAPIER.ColliderDesc.cuboid(alongX ? len / 2 : 0.12, 0.8, alongX ? 0.12 : len / 2).setTranslation(cx, y + 0.7, cz));
+    };
+    fence(P.x0, P.z0, P.x1, P.z0); fence(P.x0, P.z1, P.x1, P.z1); fence(P.x0, P.z0, P.x0, P.z1);
+    fence(P.x1, P.z0, P.x1, P.gate - P.gateW / 2); fence(P.x1, P.gate + P.gateW / 2, P.x1, P.z1);
+  }
+  // the creek
+  {
+    const water = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, F.stream.w * 2 + 3), new THREE.MeshLambertMaterial({ color: 0x5d7f8c, transparent: true, opacity: 0.82 }));
+    water.rotation.x = -Math.PI / 2; water.position.set(0, -0.62, F.stream.z); scene.add(water);
+  }
+  // decoration: a few logs already stacked behind the log pile
+  for (let k = 0; k < 3; k++) {
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(0.33, 0.33, 5, 8).rotateZ(Math.PI / 2), barkMat);
+    const z = F.pile.z + F.pile.r + 1.5;
+    m.position.set(F.pile.x + (k === 1 ? 0 : (k - 1) * 0.35), heightAt(F.pile.x, z) + 0.33 + (k === 1 ? 0.55 : 0), z + (k === 1 ? 0 : (k - 1) * 0.35));
+    m.castShadow = true; scene.add(m);
+  }
+  barn = building({ x: F.barn.x, z: F.barn.z, w: F.barn.w, d: F.barn.d, h: F.barn.h, door: F.barn.door, dh: F.barn.dh, face: -1, wall: 0xa8392c, roof: 0x5b5f66 });
+  barn.sign.userData.draw("Barn", "Finish the jobs to open");
+  barnDoor = new THREE.Mesh(new THREE.BoxGeometry(F.barn.door, F.barn.dh, 0.25), lam(0xe9e2d0));
+  barnDoor.position.set(0, F.barn.dh / 2, F.barn.d / 2 + 0.05); barn.group.add(barnDoor);
+  barnDoor.userData.collider = world.createCollider(RAPIER.ColliderDesc.cuboid(F.barn.door / 2, F.barn.dh / 2, 0.2).setTranslation(F.barn.x, barn.y0 + F.barn.dh / 2, F.barn.z - F.barn.d / 2));
+  sinkMarker = marker(F.sink.x, F.sink.z, F.sink.r + 0.6, 0x5fd0ff);
+  sinkMarker.ring.position.y = 0.1; sinkMarker.beam.position.y = 30;
+  pileMarker = marker(F.pile.x, F.pile.z, F.pile.r, 0x8be28b);
+  barnBeam = marker(F.barn.x, F.barn.z - F.barn.d / 2 - 2, 0.6, 0xffc928).beam; barnBeam.visible = false;
+  // props, always in the same order so every player's copy matches
+  for (const [x, z, len, rad, yaw] of F.logs) logs.push(addLog(x, z, len, rad, yaw));
+  for (let i = 0; i < 20; i++) {
+    const r = 0.95 + rng() * 0.35;
+    for (let tries = 0; tries < 80; tries++) {
+      const a = rng() * Math.PI * 2 + i * 1.3, d = 10 + rng() * 15, x = F.sink.x + Math.cos(a) * d, z = F.sink.z + Math.sin(a) * d;
+      if (z < -34 || x < -26 || Math.hypot(x - F.hill.x, z - F.hill.z) < F.hill.foot + 2 || (Math.abs(x) < 4.5 && z < -14)) continue;
+      if (props.some((o) => Math.hypot(o.x - x, o.z - z) < o.r + r + 1)) continue;
+      if (F.trees.some(([tx, tz]) => Math.hypot(tx - x, tz - z) < 3)) continue;
+      boulders.push(addRock(x, z, r, "boulder"));
+      break;
+    }
+  }
+  stump = addStump(F.stump.x, F.stump.z);
+  tractor = addTractor(F.tractor.x, F.tractor.z);
+}
+// ----- level 2: Rapid River -----
+let crate = null, toolbox = null, depotMarker = null, fordMarker = null;
+const riverRocks = [], gravel = [];            // gravel: [prop index, x, z, radius] for every rock crushed
+if (SITE === "river") {
+  const R = RIVER;
+  backdropTrees(130, 82, 94);
+  for (const [x, z] of R.trees) addTree(x, z, 1.1 + rng() * 0.4);
+  const water = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, 22), new THREE.MeshLambertMaterial({ color: 0x3f7fa6, transparent: true, opacity: 0.85 }));
+  water.rotation.x = -Math.PI / 2; water.position.set(0, R.water, R.mid); scene.add(water);
+  fordMarker = marker(R.ford.x, R.mid - 9, 4.5, 0xffa23a);
+  depotMarker = marker(R.depot.x, R.depot.z, R.depot.r, 0x8be28b);
+  crate = addCrate(R.crate.x, R.crate.z, 2.2, 1.7, 2.6, 0xd64528, "generator", 150);
+  toolbox = addCrate(R.tool.x, R.tool.z, 1.3, 0.9, 1.0, 0x3b8fe0, "toolbox", 260);
+  for (const [x, z, r] of R.rocks) riverRocks.push(addRock(x, z, r, "rock"));
+}
+// Crushing a rock spreads it into a patch of gravel: firm footing over mud.
+// ----- level 3: Ridge Road -----
+let cabin = null, firewood = null, padMarker = null;
+const ridgeRocks = [];
+if (SITE === "ridge") {
+  const R = RIDGE;
+  backdropTrees(130, 82, 94);
+  for (const [x, z] of R.trees) addTree(x, z, 1.1 + rng() * 0.4);
+  addPost(R.post.x, R.post.z);
+  padMarker = marker(R.pad.x, R.pad.z, R.pad.r, 0x8be28b);
+  cabin = addCrate(R.cabin.x, R.cabin.z, 3.0, 2.3, 3.6, 0xb98a52, "cabin", 140);
+  {                                               // give the cabin a roof, a door and a window
+    const roof = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 2.5, 1.3, 4, 1).rotateY(Math.PI / 4), lam(0x8f3b2e, true)); roof.scale.set(1, 1, 1.25); roof.position.y = 1.85; roof.castShadow = true; cabin.mesh.add(roof);
+    const door = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.5, 0.06), lam(0x5a3b22)); door.position.set(-0.6, -0.35, 1.82); cabin.mesh.add(door);
+    const win = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.7, 0.06), lam(0x9fd0e8)); win.position.set(0.7, 0.15, 1.82); cabin.mesh.add(win);
+  }
+  firewood = addCrate(R.wood.x, R.wood.z, 1.5, 1.0, 1.2, 0x8a5a2b, "firewood crate", 240);
+  for (const [x, z, r] of R.rocks) ridgeRocks.push(addRock(x, z, r, "rock"));
+}
+
+function markCrushed(idx) {
+  if (gravel.includes(idx)) return false;
+  gravel.push(idx);
+  const p = props[idx];
+  if (p && p.active) { p.active = false; p.body.setEnabled(false); p.mesh.visible = false; if (winch.on && winch.kind === 1 && winch.ref === idx) hookOff(); }
+  return true;
+}
+// Called by whoever crushed it: the rock becomes a heap of loose gravel you can scoop, carry and spread.
+function layGravel(idx, x, z, size) {
+  if (!markCrushed(idx)) return;
+  const vol = 3 + size * 3, n = 30;
+  for (let k = 0; k < n; k++) {
+    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * (1.2 + size);
+    splat(x + Math.cos(a) * d, z + Math.sin(a) * d, vol / n, vol / n);
+  }
+  for (let k = 0; k < 24; k++) spawnDirt(x + (Math.random() - 0.5) * 2, heightAt(x, z) + 0.8, z + (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 6, 3 + Math.random() * 3, (Math.random() - 0.5) * 6, 0, 1);
+}
+
+// ----- level 4: Gravel Run -----
+let hopper = null, padCells = [], pinCells = [], picnic = null, blockLog = null, padMarker4 = null, fordMarker4 = null, bayMarker = null;
+const hopperD = [0, 0], blockRocks = [], fordRocks = [];
+if (SITE === "haul") {
+  const H = HAUL;
+  backdropTrees(130, 82, 94);
+  for (const [x, z] of H.trees) addTree(x, z, 1.1 + rng() * 0.4);
+  const cellsIn = (x0, x1, z0, z1) => { const out = []; for (let x = x0; x <= x1; x += CELL) for (let z = z0; z <= z1; z += CELL) out.push(Math.round((z + HALF) / CELL) + Math.round((x + HALF) / CELL) * W); return out; };
+  const P = H.pad;
+  padCells = cellsIn(P.x - P.w / 2, P.x + P.w / 2, P.z - P.d / 2, P.z + P.d / 2);
+  pinCells = cellsIn(H.hairpin.x0, H.hairpin.x1, H.hairpin.z0, H.hairpin.z1);
+  const line = lam(0xffc928);
+  for (const [sx, sz, lx, lz] of [[P.w, 0.2, 0, -P.d / 2], [P.w, 0.2, 0, P.d / 2], [0.2, P.d, -P.w / 2, 0], [0.2, P.d, P.w / 2, 0]]) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(sx, 0.12, sz), line); m.position.set(P.x + lx, 0.4, P.z + lz); scene.add(m);
+  }
+  padMarker4 = marker(P.x, P.z, 1.2, 0xffc928);
+  fordMarker4 = marker(-40, H.stream.z, 6, 0xffa23a);
+  // the loading hopper: a bin you tip into, a conveyor, and a chute a truck parks under
+  const hp = H.hopper, y0 = heightAt(hp.x, hp.z), bay = H.bay, yb = heightAt(bay.x, bay.z), concrete = lam(0xa9adb3), yellow = lam(0xffc928);
+  const solid = (mat, sx, sy, sz, x, y, z) => { const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; scene.add(m);
+    world.createCollider(RAPIER.ColliderDesc.cuboid(sx / 2, sy / 2, sz / 2).setTranslation(x, y, z)); return m; };
+  solid(concrete, 4.9, 1.3, 0.3, hp.x, y0 + 0.65, hp.z + 2.3); solid(concrete, 4.9, 1.3, 0.3, hp.x, y0 + 0.65, hp.z - 2.3);
+  solid(concrete, 0.3, 1.3, 4.9, hp.x + 2.3, y0 + 0.65, hp.z); solid(concrete, 0.3, 1.3, 4.9, hp.x - 2.3, y0 + 0.65, hp.z);
+  for (const e of [-1, 1]) solid(yellow, 0.35, 5.0, 0.35, bay.x + e * 2.3, yb + 2.5, bay.z);
+  const chute = new THREE.Mesh(new THREE.BoxGeometry(4.95, 0.9, 1.4), yellow); chute.position.set(bay.x, yb + 5.0, bay.z); chute.castShadow = true; scene.add(chute);
+  const from = new THREE.Vector3(hp.x, y0 + 1.0, hp.z - 2.4), to = new THREE.Vector3(bay.x, yb + 5.3, bay.z);
+  const belt = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.25, from.distanceTo(to)), lam(0x3a3f46)); belt.position.copy(from).lerp(to, 0.5); belt.lookAt(to); belt.castShadow = true; scene.add(belt);
+  const heap = new THREE.Mesh(new THREE.SphereGeometry(2.1, 12, 6), lam(0xa9a8a2, true)); heap.position.set(hp.x, y0, hp.z); heap.visible = false; scene.add(heap);
+  const sign = makeSign(4.2, 1.1); sign.position.set(hp.x, y0 + 2.2, hp.z - 2.5); sign.rotation.y = Math.PI; scene.add(sign); sign.userData.draw("Hopper", "Tip gravel in here");
+  hopper = { x: hp.x, z: hp.z, y0, vol: 0, g: 0, cap: 40, heap };
+  bayMarker = marker(bay.x, bay.z, bay.r, 0xffa23a);
+  // props: the pit road blockage, rocks by the stream, the picnic tables
+  { const [x, z, len, rad, yaw] = H.block.log; blockLog = addLog(x, z, len, rad, yaw); blockLog.name = "fallen tree"; }
+  for (const [x, z, r] of H.block.rocks) blockRocks.push(addRock(x, z, r, "rock"));
+  for (const [x, z, r] of H.fordRocks) fordRocks.push(addRock(x, z, r, "rock"));
+  picnic = addCrate(H.picnic.x, H.picnic.z, 2.0, 1.0, 1.4, 0x8a5a2b, "picnic tables", 200);
+}
+
+// ----- level 5: Flood Season -----
+let gate = null, gatePanel = null, riverWater = null, floodWater = null, lowBeam = null;
+const cars = [], breachBeams = [], tyreMat = lam(0x22262c);
+if (SITE === "flood") {
+  const F = FLOOD;
+  backdropTrees(130, 82, 94);
+  for (const [x, z] of F.trees) addTree(x, z, 1.1 + rng() * 0.4);
+  for (const [x, z, face] of F.homes) {
+    const b = building({ x, z, w: 7, d: 6, h: 3.6, door: 2.2, dh: 2.3, face, wall: [0xe9dcc3, 0xd7e3ea, 0xf0d2c0][Math.floor(rng() * 3)], roof: [0x8f3b2e, 0x3b5f8f, 0x4f6b3a][Math.floor(rng() * 3)] });
+    b.sign.visible = false;
+  }
+  const wmat = new THREE.MeshLambertMaterial({ color: 0x4f7f95, transparent: true, opacity: 0.85 });
+  riverWater = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, HALF - F.levee.z + 1), wmat);
+  riverWater.rotation.x = -Math.PI / 2; riverWater.position.set(0, F.water.start, (F.levee.z - 1 + HALF) / 2); scene.add(riverWater);
+  floodWater = new THREE.Mesh(new THREE.PlaneGeometry(SIZE, HALF + F.levee.z), wmat);
+  floodWater.rotation.x = -Math.PI / 2; floodWater.position.set(0, -5, (F.levee.z - HALF) / 2); floodWater.visible = false; scene.add(floodWater);
+  // the floodgate slot: two concrete walls through the levee, and the gate panel once it is in
+  const concrete = lam(0xa9adb3), gx = F.gate.x, gz = F.levee.z;
+  for (const e of [-1, 1]) {
+    const x = gx + e * (F.gate.w / 2 + 0.45), m = new THREE.Mesh(new THREE.BoxGeometry(0.9, 3.4, 9), concrete); m.position.set(x, 1.3, gz); m.castShadow = m.receiveShadow = true; scene.add(m);
+    world.createCollider(RAPIER.ColliderDesc.cuboid(0.45, 1.7, 4.5).setTranslation(x, 1.3, gz));
+  }
+  gatePanel = new THREE.Mesh(new THREE.BoxGeometry(F.gate.w, 3.0, 0.5), lam(0x7d858f)); gatePanel.position.set(gx, heightAt(gx, gz) + 1.5, gz); gatePanel.visible = false; gatePanel.castShadow = true; scene.add(gatePanel);
+  gate = addCrate(F.gateProp.x, F.gateProp.z, 3.7, 1.6, 1.2, 0x7d858f, "floodgate", 900);
+  for (const b of F.breaches) { const mk = marker(b.x, F.levee.z, 0.5, 0xffa23a); mk.ring.visible = false; breachBeams.push(mk.beam); }
+  const gm = marker(gx, gz, 0.5, 0xffa23a); gm.ring.visible = false; breachBeams.push(gm.beam);
+  lowBeam = marker(0, F.levee.z, 0.5, 0xff4a3a).beam; lowBeam.visible = false;
+  for (const [x, z, color] of F.cars) {
+    const c = addCrate(x, z, 1.9, 1.0, 4.0, color, "car", 420);
+    c.mesh.children.slice(1).forEach((m) => (m.visible = false));                    // no crate straps on a car
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.7, 2.0), lam(0x9fd0e8)); cab.position.set(0, 0.85, -0.2); c.mesh.add(cab);
+    for (const [sx, sz] of [[1, 1.3], [-1, 1.3], [1, -1.3], [-1, -1.3]]) { const w = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.42, 0.3, 12).rotateZ(Math.PI / 2), tyreMat); w.position.set(sx * 0.95, -0.45, sz); c.mesh.add(w); }
+    cars.push(c);
+  }
+}
+function lockGate() {
+  if (!gate || !gate.active) return;
+  gate.active = false; gate.body.setEnabled(false); gate.mesh.visible = false; if (winch.on && winch.kind === 1 && winch.ref === gate.index) hookOff();
+  gatePanel.visible = true;
+  const F = FLOOD;
+  world.createCollider(RAPIER.ColliderDesc.cuboid(F.gate.w / 2, 1.5, 0.25).setTranslation(F.gate.x, gatePanel.position.y, F.levee.z));
+}
+
+function setActiveBoulders(n) {
+  n = clamp(n, 5, boulders.length);
+  for (let i = 0; i < boulders.length; i++) {
+    const b = boulders[i], on = i < n;
+    if (b.active !== on) { b.active = on; b.body.setEnabled(on); b.mesh.visible = on; }
+  }
+  activeBoulders = n;
+}
+if (SITE === "farm") setActiveBoulders(5);
+
+// ---------- wheel loaders ----------
+const L = {
+  mass: 3000, engine: 5200, maxSpeed: 9.5, reverseSpeed: 6, brake: 130, park: 70000, idleBrake: 80, steer: 0.55, slip: 3.2,
+  wheelR: 0.8, rest: 0.45, wx: 1.3, wz: 1.55, wy: -0.25,
+  pivot: new THREE.Vector3(0, 0.55, 1.7), armLen: 2.7, armMin: -0.93, armMax: 0.72, tiltMin: -0.95, tiltMax: 0.8,
+  assist: true, capacity: 6, loadDrag: 1500, pushDrag: 450, firmDrag: 5000, looseRate: 2.5, firmRate: 0.45, pour: 2.4,
+};
+// what each vehicle can do; every vehicle has the winch
+const KINDS = {
+  loader: { name: "wheel loader", engine: 5200, maxSpeed: 9.5, reverseSpeed: 6, steer: 0.55 },
+  roller: { name: "road roller", engine: 6200, maxSpeed: 5.5, reverseSpeed: 4.5, steer: 0.5 },
+  truck: { name: "dump truck", engine: 7400, maxSpeed: 12, reverseSpeed: 6, steer: 0.5, cap: 18 },
+};
+const WINCH = { max: 35, tmax: 60000, reelIn: 2.5, payOut: 3.5, min: 2.5 };
+const HOOK = new THREE.Vector3(0, 0.15, -2.85);       // the winch fairlead on the counterweight
+const COLORS = [0xf2b21c, 0xe2572b, 0x3b8fe0, 0x52b45a];
+const dark = lam(0x2b2f36), steel = lam(0x565c66), glass = lam(0x9fd0e8), dirtMat = lam(0x8a6238, true);
+function box(mat, sx, sy, sz, x, y, z, parent) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(sx, sy, sz), mat);
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; parent.add(m);
+  return m;
+}
+const site0 = { hub: HUB.spawn, farm: FARM.spawn, river: RIVER.spawn, ridge: RIDGE.spawn, haul: HAUL.spawn, flood: FLOOD.spawn }[SITE];
+const spawnAt = (slot) => {
+  const off = -7.5 + slot * 5, c = Math.cos(site0.yaw), s = Math.sin(site0.yaw);
+  return { x: site0.x + off * c, z: site0.z - off * s, yaw: site0.yaw };
+};
+
+// ---------- paint jobs ----------
+const PAINTS = [0xf2b21c, 0xe2572b, 0xd8333a, 0xff7ab8, 0x8a4fd1, 0x3b8fe0, 0x2fc4c4, 0x52b45a, 0xa6e22e, 0xf2f2ee, 0x9aa3ad, 0x22262c];
+const PAINT_NAMES = ["Yellow", "Orange", "Red", "Pink", "Purple", "Blue", "Teal", "Green", "Lime", "White", "Silver", "Black"];
+const STRIPES = ["None", "Centre stripe", "Twin stripes"];
+const FLAMES = ["None", "Sides", "Hood", "Sides and hood"];
+const FLAME_SETS = [
+  { name: "Classic", c: ["#fff3a0", "#ffb21f", "#e8461a"] }, { name: "Blue", c: ["#e6f7ff", "#59c1ff", "#1d52d9"] },
+  { name: "Green", c: ["#f0ffc4", "#8ee34f", "#1f8a2e"] }, { name: "White", c: ["#ffffff", "#dfe3e8", "#9aa3ad"] },
+  { name: "Purple", c: ["#ffe1ff", "#d27bff", "#6a2bd1"] },
+];
+const DEFAULT_LOOK = { p: -1, s: 0, sc: 9, f: 0, fc: 0 };       // p -1: the crew colour of your room slot
+const flameTex = [];
+// Flame decal: tongues of fire that start at the left edge (the front) and lick back to the right.
+function getFlameTex(i) {
+  if (flameTex[i]) return flameTex[i];
+  const W2 = 512, H2 = 192, cv = document.createElement("canvas"); cv.width = W2; cv.height = H2;
+  const g = cv.getContext("2d"), lens = [0.72, 0.98, 0.82, 1.0, 0.76], n = lens.length;
+  const layer = (color, k, grow) => {
+    g.fillStyle = color;
+    g.fillRect(0, H2 * 0.08, W2 * 0.12 * k, H2 * 0.84);               // a solid band where the tongues start
+    for (let t = 0; t < n; t++) {
+      const yc = H2 * (0.16 + (0.68 * t) / (n - 1)), len = W2 * lens[t] * k, h = H2 * 0.34 * grow;
+      g.beginPath();
+      g.moveTo(0, yc - h * 0.6);
+      g.bezierCurveTo(len * 0.4, yc - h * 0.8, len * 0.72, yc - h * 0.05, len, yc - h * 0.4);
+      g.bezierCurveTo(len * 0.8, yc + h * 0.12, len * 0.5, yc + h * 0.6, 0, yc + h * 0.62);
+      g.closePath(); g.fill();
+    }
+  };
+  const c = FLAME_SETS[i].c;
+  g.strokeStyle = "rgba(20,20,24,0.55)"; g.lineWidth = 10; g.lineJoin = "round";      // a dark outline so flames read on any paint
+  layer("rgba(20,20,24,0.55)", 1.03, 1.08);
+  layer(c[2], 1, 1); layer(c[1], 0.76, 0.78); layer(c[0], 0.48, 0.55);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace; tex.anisotropy = 4;
+  return (flameTex[i] = tex);
+}
+const cleanLook = (a) => {
+  const L2 = Array.isArray(a) ? a : [];
+  const n = (v, lo, hi, d) => (Number.isInteger(v) && v >= lo && v <= hi ? v : d);
+  return { p: n(L2[0], -1, PAINTS.length - 1, -1), s: n(L2[1], 0, 2, 0), sc: n(L2[2], 0, PAINTS.length - 1, 9), f: n(L2[3], 0, 3, 0), fc: n(L2[4], 0, FLAME_SETS.length - 1, 0) };
+};
+const lookArr = (k) => [k.p, k.s, k.sc, k.f, k.fc];
+// show the look on a vehicle: paint, stripes and flames, for whichever kind it is right now
+function applyLook(ld, look) {
+  ld.look = { ...look };
+  ld.paint.color.set(look.p >= 0 ? PAINTS[look.p] : COLORS[ld.slot]);
+  ld.decor.stripeMat.color.set(PAINTS[look.sc]);
+  ld.decor.flameMat.map = getFlameTex(look.fc); ld.decor.flameMat.needsUpdate = true;
+  showDecor(ld);
+}
+function showDecor(ld) {
+  const k = ld.look || DEFAULT_LOOK, d = ld.decor;
+  for (const m of d.single) m.visible = m.userData.kind === ld.kind && k.s === 1;
+  for (const m of d.twin) m.visible = m.userData.kind === ld.kind && k.s === 2;
+  for (const m of d.sides) m.visible = m.userData.kind === ld.kind && (k.f & 1) > 0;
+  for (const m of d.hood) m.visible = m.userData.kind === ld.kind && (k.f & 2) > 0;
+}
+// where the decals go on each kind of vehicle
+const DECOR = {
+  loader: { side: { x: 1.012, y: 0.56, z: -1.3, len: 2.26, h: 0.78 }, hood: { y: 0.957, z: -1.62, len: 1.6, w: 1.8 },
+    stripes: [[0.962, -1.625, 1.65], [1.948, -0.15, 1.45], [0.407, 0.9, 2.0]] },
+  roller: { side: { x: 0.962, y: 0.5, z: -0.75, len: 2.55, h: 0.7 }, hood: { y: 0.857, z: -1.62, len: 0.8, w: 1.7 },
+    stripes: [[0.862, -1.625, 0.85], [2.128, -0.55, 1.5], [0.862, 0.33, 0.45]] },
+  truck: { side: { x: 1.112, y: 0.62, z: 2.05, len: 1.45, h: 0.95 }, hood: { y: 1.567, z: 2.05, len: 1.5, w: 2.0 },
+    stripes: [[1.567, 2.05, 1.55]] },
+};
+function buildDecor(group) {
+  const d = { stripeMat: lam(0xf2f2ee), single: [], twin: [], sides: [], hood: [],
+    flameMat: new THREE.MeshLambertMaterial({ map: getFlameTex(0), transparent: true, alphaTest: 0.35, side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: -2 }) };
+  const add = (kind, mesh, list) => { mesh.visible = false; mesh.userData.kind = kind; group.add(mesh); list.push(mesh); };
+  for (const kind of ["loader", "roller", "truck"]) {
+    const D = DECOR[kind];
+    for (const [y, z, len] of D.stripes) {
+      const one = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.012, len), d.stripeMat); one.position.set(0, y, z); add(kind, one, d.single);
+      for (const sx of [-0.32, 0.32]) { const two = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.012, len), d.stripeMat); two.position.set(sx, y, z); add(kind, two, d.twin); }
+    }
+    for (const e of [1, -1]) {
+      const geo = new THREE.PlaneGeometry(D.side.len, D.side.h);
+      if (e < 0) geo.scale(-1, 1, 1);
+      geo.rotateY((e * Math.PI) / 2);
+      const m = new THREE.Mesh(geo, d.flameMat); m.position.set(e * D.side.x, D.side.y, D.side.z); add(kind, m, d.sides);
+    }
+    const hg = new THREE.PlaneGeometry(D.hood.len, D.hood.w).rotateX(-Math.PI / 2).rotateY(Math.PI / 2);
+    const hm = new THREE.Mesh(hg, d.flameMat); hm.position.set(0, D.hood.y, D.hood.z); add(kind, hm, d.hood);
+  }
+  return d;
+}
+
+function makeLoader(slot, local) {
+  const paint = lam(COLORS[slot]);
+  const group = new THREE.Group(); scene.add(group);
+  box(paint, 2.0, 1.1, 2.3, 0, 0.4, -1.3, group);        // engine housing
+  box(dark, 2.1, 0.5, 0.5, 0, 0.05, -2.5, group);        // counterweight
+  box(steel, 0.5, 0.45, 0.3, 0, 0.15, -2.75, group);     // winch drum
+  box(paint, 1.5, 0.7, 2.0, 0, 0.05, 0.9, group);        // front frame
+  box(dark, 1.9, 0.3, 4.4, 0, -0.35, -0.2, group);       // underbody
+  box(glass, 1.4, 1.1, 1.3, 0, 1.25, -0.15, group);      // cab
+  box(paint, 1.55, 0.14, 1.45, 0, 1.87, -0.15, group);   // roof
+  box(dark, 0.16, 0.9, 0.16, 0.6, 1.3, -1.9, group);     // exhaust
+  box(steel, 2.2, 0.5, 0.4, 0, 0.55, 1.75, group);       // arm tower
+  const armPivot = new THREE.Group(); armPivot.position.copy(L.pivot); group.add(armPivot);
+  box(paint, 0.22, 0.3, L.armLen, 0.95, 0, L.armLen / 2, armPivot);
+  box(paint, 0.22, 0.3, L.armLen, -0.95, 0, L.armLen / 2, armPivot);
+  box(steel, 1.9, 0.16, 0.16, 0, 0, L.armLen * 0.55, armPivot);
+  const bucketPivot = new THREE.Group(); bucketPivot.position.set(0, 0, L.armLen); armPivot.add(bucketPivot);
+  const bucketParts = [
+    box(steel, 2.9, 0.1, 1.35, 0, 0, 0.62, bucketPivot),      // floor
+    box(steel, 2.9, 1.15, 0.12, 0, 0.55, 0, bucketPivot),     // back
+    box(steel, 0.1, 0.95, 1.3, 1.45, 0.45, 0.62, bucketPivot),
+    box(steel, 0.1, 0.95, 1.3, -1.45, 0.45, 0.62, bucketPivot),
+  ];
+  box(dark, 2.9, 0.06, 0.12, 0, 0.0, 1.3, bucketPivot);       // cutting edge (visual only)
+  const heap = new THREE.Mesh(new THREE.SphereGeometry(1, 9, 5), lam(0x8a6238, true));
+  heap.position.set(0, 0.08, 0.62); heap.visible = false; heap.castShadow = true; bucketPivot.add(heap);
+
+  const s = spawnAt(slot);
+  const desc = (local ? RAPIER.RigidBodyDesc.dynamic().setCanSleep(false).setLinearDamping(0.05).setAngularDamping(0.6) : RAPIER.RigidBodyDesc.kinematicPositionBased())
+    .setTranslation(s.x, local ? heightAt(s.x, s.z) + 1.9 : -300, s.z)    // other players wait out of sight until their first report
+    .setRotation(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), s.yaw));
+  const body = world.createRigidBody(desc);
+  group.visible = local;
+  world.createCollider(RAPIER.ColliderDesc.cuboid(1.0, 0.55, 2.4).setTranslation(0, 0.2, -0.3).setMass(L.mass * 0.3).setFriction(0.4), body);
+  world.createCollider(RAPIER.ColliderDesc.cuboid(0.8, 0.15, 1.9).setTranslation(0, -0.5, -0.2).setMass(L.mass * 0.7).setFriction(0.4), body);   // low ballast keeps it upright
+  world.createCollider(RAPIER.ColliderDesc.cuboid(0.7, 0.6, 0.65).setTranslation(0, 1.3, -0.15).setMass(1).setFriction(0.4), body);          // cab
+  const bucketColliders = bucketParts.map((m) => {
+    const p = m.geometry.parameters;   // the bucket passes through the ground, so the lip can sit on it and cut into it
+    return world.createCollider(RAPIER.ColliderDesc.cuboid(p.width / 2, p.height / 2, p.depth / 2).setMass(1).setFriction(0.3).setCollisionGroups(0x0002fffe), body);
+  });
+  const wheels = [];
+  for (const [sx, sz] of [[1, 1], [-1, 1], [1, -1], [-1, -1]]) {
+    const steerNode = new THREE.Group(); steerNode.position.set(sx * L.wx, L.wy - L.rest + 0.08, sz * L.wz); group.add(steerNode);
+    const spin = new THREE.Group(); steerNode.add(spin);
+    const tyre = new THREE.Mesh(new THREE.CylinderGeometry(L.wheelR, L.wheelR, 0.62, 14).rotateZ(Math.PI / 2), dark); tyre.castShadow = true;
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.38, 0.38, 0.66, 8).rotateZ(Math.PI / 2), paint);
+    spin.add(tyre, hub, new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.16, 0.5), paint));
+    wheels.push({ steerNode, spin, front: sz > 0, sx, sz });
+  }
+  // the same machine can also be a road roller: its own bodywork and two drums, hidden until chosen
+  const loaderVis = [...group.children], rollerVis = [];
+  const rb = (mat, sx, sy, sz, x, y, z) => { const m = box(mat, sx, sy, sz, x, y, z, group); m.visible = false; rollerVis.push(m); return m; };
+  rb(paint, 1.9, 1.0, 2.6, 0, 0.35, -0.75); rb(dark, 2.0, 0.45, 0.5, 0, 0.05, -2.5); rb(steel, 0.5, 0.45, 0.3, 0, 0.15, -2.75);
+  rb(glass, 1.5, 1.15, 1.3, 0, 1.4, -0.55); rb(paint, 1.65, 0.14, 1.5, 0, 2.05, -0.55); rb(dark, 0.16, 0.8, 0.16, 0.65, 1.2, -1.8);
+  rb(paint, 0.24, 0.5, 2.3, 1.48, -0.1, 1.45); rb(paint, 0.24, 0.5, 2.3, -1.48, -0.1, 1.45); rb(paint, 3.2, 0.34, 0.34, 0, 0.12, 0.5);
+  const drums = [[2.7, 1.7], [2.3, -1.5]].map(([w, z]) => {
+    const d = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.85, w, 20).rotateZ(Math.PI / 2), steel);
+    d.position.set(0, -0.56, z); d.castShadow = true; d.visible = false; group.add(d); rollerVis.push(d);
+    const mark = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, 0.12, 0.4), dark); mark.position.y = 0.81; d.add(mark);
+    return d;
+  });
+  // ... or a dump truck: cab at the front, a tipping bed behind
+  const truckVis = wheels.map((w) => w.steerNode);
+  const tb = (mat, sx, sy, sz, x, y, z) => { const m = box(mat, sx, sy, sz, x, y, z, group); m.visible = false; truckVis.push(m); return m; };
+  tb(dark, 1.7, 0.35, 5.6, 0, -0.2, -0.4); tb(paint, 2.2, 1.5, 1.5, 0, 0.7, 2.05); tb(glass, 2.0, 0.75, 0.1, 0, 1.0, 2.81);
+  tb(paint, 2.25, 0.12, 1.55, 0, 1.5, 2.05); tb(dark, 2.3, 0.3, 0.25, 0, -0.1, 2.9); tb(dark, 0.14, 1.1, 0.14, 1.0, 1.55, 1.25);
+  const bedPivot = new THREE.Group(); bedPivot.position.set(0, 0.2, -3.05); bedPivot.visible = false; group.add(bedPivot); truckVis.push(bedPivot);
+  box(steel, 2.5, 0.12, 4.4, 0, 0, 2.2, bedPivot); box(paint, 0.1, 1.1, 4.4, 1.25, 0.55, 2.2, bedPivot); box(paint, 0.1, 1.1, 4.4, -1.25, 0.55, 2.2, bedPivot);
+  box(paint, 2.5, 1.35, 0.12, 0, 0.67, 4.4, bedPivot);
+  const bedHeap = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 6), lam(0x8a6238, true)); bedHeap.position.set(0, 0.12, 2.2); bedHeap.visible = false; bedHeap.castShadow = true; bedPivot.add(bedHeap);
+  const decor = buildDecor(group);
+  const ld = { slot, paint, bedPivot, bedHeap, bed: 0, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, loadG: 0, roll: 0,
+    kind: "loader", vis: { loader: loaderVis, roller: rollerVis, truck: truckVis }, drums, decor, look: { ...DEFAULT_LOOK } };
+  return ld;
+}
+function setKind(ld, kind) {
+  if (!KINDS[kind] || ld.kind === kind) return;
+  ld.kind = kind;
+  for (const k in ld.vis) for (const m of ld.vis[k]) m.visible = false;      // wheels belong to two kinds, so hide all first
+  for (const m of ld.vis[kind]) m.visible = true;
+  for (const c of ld.bucketColliders) c.setEnabled(kind === "loader");
+  showDecor(ld);
+}
+function disposeLoader(ld) { world.removeRigidBody(ld.body); scene.remove(ld.group); }
+
+const me = makeLoader(0, true);
+let myLook = { ...DEFAULT_LOOK };
+try { myLook = cleanLook(JSON.parse(localStorage.getItem("jobsite-look") || "null")); } catch {}
+applyLook(me, myLook);
+const chassis = me.body;
+// Places to change vehicle: the garage in the quarry, and a vehicle yard near the start of each job.
+const YARD = { farm: { x: 17, z: -70, r: 5.5 }, river: { x: 17, z: -68, r: 5.5 }, ridge: { x: -19, z: -78, r: 5.5 }, haul: HAUL.yards[0], flood: FLOOD.yards[0] }[SITE] || null;
+const YARDS = { haul: HAUL.yards, flood: FLOOD.yards }[SITE] || (YARD ? [YARD] : []);
+function parkDisplay(kind, slot, x, z, yaw) {
+  const d = makeLoader(slot, false);
+  setKind(d, kind);
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+  d.body.setTranslation({ x, y: heightAt(x, z) + 1.42, z }, true); d.body.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+  d.group.visible = true; d.group.position.set(x, heightAt(x, z) + 1.42, z); d.group.quaternion.copy(q);
+  d.arm = -0.6; d.tilt = 0.3;
+  return d;
+}
+const displays = [];
+if (SITE === "hub") {
+  const gh = HUB.houses.find((h) => h.garage);
+  displays.push(parkDisplay("roller", 2, gh.x - 10.5, gh.z - 2.5, 0), parkDisplay("loader", 3, gh.x - 3.5, gh.z - 2.5, 0));
+} else {
+  YARDS.forEach((y, n) => {
+    marker(y.x, y.z, y.r, 0xb48cff);
+    const big = SITE === "haul" || SITE === "flood";
+    displays.push(parkDisplay(big ? "truck" : "roller", 2, y.x + 8.5, y.z + 1, -0.5));
+    if (big && n === 0) displays.push(parkDisplay("roller", 3, y.x - 8.5, y.z + 1, 0.5));
+  });
+}
+const vehicle = world.createVehicleController(chassis);
+vehicle.indexUpAxis = 1;
+vehicle.setIndexForwardAxis = 2;
+me.wheels.forEach((w, i) => {
+  vehicle.addWheel({ x: w.sx * L.wx, y: L.wy, z: w.sz * L.wz }, { x: 0, y: -1, z: 0 }, { x: -1, y: 0, z: 0 }, L.rest, L.wheelR);
+  vehicle.setWheelSuspensionStiffness(i, 26);
+  vehicle.setWheelSuspensionCompression(i, 3.2);
+  vehicle.setWheelSuspensionRelaxation(i, 4.2);
+  vehicle.setWheelMaxSuspensionTravel(i, 0.4);
+  vehicle.setWheelMaxSuspensionForce(i, L.mass * 40);
+  vehicle.setWheelFrictionSlip(i, L.slip);
+  vehicle.setWheelSideFrictionStiffness(i, 1.0);
+});
+const notChassis = (c) => { const p = c.parent(); return !p || p.handle !== chassis.handle; };
+
+const input = { fwd: 0, turn: 0, brake: 0, arm: 0, tilt: 0, reel: 0 };
+const _m = new THREE.Matrix4(), _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _s = new THREE.Vector3();
+const ZV = new THREE.Vector3();
+const _bpq = new THREE.Quaternion(), _bpt = new THREE.Vector3();
+function bodyPoint(body, local, out) {
+  const t = body.translation(), r = body.rotation();
+  return out.copy(local).applyQuaternion(_bpq.set(r.x, r.y, r.z, r.w)).add(_bpt.set(t.x, t.y, t.z));
+}
+function heading() { const r = chassis.rotation(); return Math.atan2(2 * (r.x * r.z + r.w * r.y), 1 - 2 * (r.x * r.x + r.y * r.y)); }
+
+function poseBucket(ld) {
+  ld.armPivot.rotation.x = -ld.arm;
+  ld.bucketPivot.rotation.x = ld.arm - ld.tilt;       // stays level as the arms rise, like a real loader linkage
+  ld.armPivot.updateMatrix(); ld.bucketPivot.updateMatrix();
+  for (let i = 0; i < ld.bucketParts.length; i++) {
+    ld.bucketParts[i].updateMatrix();
+    _m.multiplyMatrices(ld.armPivot.matrix, ld.bucketPivot.matrix).multiply(ld.bucketParts[i].matrix).decompose(_p, _q, _s);
+    ld.bucketColliders[i].setTranslationWrtParent({ x: _p.x, y: _p.y, z: _p.z });
+    ld.bucketColliders[i].setRotationWrtParent({ x: _q.x, y: _q.y, z: _q.z, w: _q.w });
+  }
+  if (ld.bedPivot) {
+    ld.bedPivot.rotation.x = -(ld.bed || 0);
+    const fb = (ld.load || 0) / KINDS.truck.cap;
+    ld.bedHeap.visible = ld.kind === "truck" && fb > 0.03;
+    if (ld.bedHeap.visible) { ld.bedHeap.scale.set(1.15, 0.15 + 0.8 * fb, 1.95); ld.bedHeap.material.color.copy(ld.loadG > ld.load * 0.5 ? cGravel : cLoose); }
+  }
+  const f = ld.load / L.capacity;
+  ld.heap.visible = f > 0.03;
+  if (ld.heap.visible) { ld.heap.scale.set(1.35, 0.2 + 0.95 * f, 0.45 + 0.25 * f); ld.heap.material.color.copy(ld.loadG > ld.load * 0.5 ? cGravel : cLoose); }
+}
+
+// world matrix of my bucket (origin at the back of the floor, z out to the lip, y up through the floor)
+const _bw = new THREE.Matrix4(), _bi = new THREE.Matrix4(), _cq = new THREE.Quaternion(), _cp = new THREE.Vector3(), _one = new THREE.Vector3(1, 1, 1),
+  _up = new THREE.Vector3(), _back = new THREE.Vector3(), _rp = new THREE.Vector3();
+function bucketFrame() {
+  const t = chassis.translation(), r = chassis.rotation();
+  _bw.compose(_cp.set(t.x, t.y, t.z), _cq.set(r.x, r.y, r.z, r.w), _one).multiply(me.armPivot.matrix).multiply(me.bucketPivot.matrix);
+  _bi.copy(_bw).invert();
+  _up.setFromMatrixColumn(_bw, 1); _back.setFromMatrixColumn(_bw, 2).negate();
+}
+
+// Scoop assist: a rock sitting just ahead of the bucket lip while the loader drives into it is
+// nudged up and back so it slides in, instead of being bulldozed along the ground forever.
+function scoopAssist(speed) {
+  if (!L.assist || speed < 0.4 || me.tilt < -0.2 || me.tilt > 0.5) return;
+  for (const k of props) {
+    if (!k.active || k.type !== "rock" || k.r > 1.0) continue;
+    const p = k.body.translation();
+    _rp.set(p.x, p.y, p.z).applyMatrix4(_bi);
+    if (Math.abs(_rp.x) > 1.4 || _rp.z < 0.75 || _rp.z > 1.5 + k.r || _rp.y < -0.3 || _rp.y > k.r + 0.45) continue;
+    const m = k.body.mass() * DT;
+    k.body.applyImpulse({ x: (_up.x * 10 + _back.x * 6) * m, y: (_up.y * 10 + _back.y * 6) * m, z: (_up.z * 10 + _back.z * 6) * m }, true);
+  }
+}
+
+// ---------- falling dirt ----------
+// Dumped dirt leaves the bucket as clods that fall and only become ground where they land.
+const PMAX = 900, PVOL = 0.012;
+const parts = { n: 0, x: new Float32Array(PMAX * 3), v: new Float32Array(PMAX * 3), vol: new Float32Array(PMAX), g: new Float32Array(PMAX), s: new Float32Array(PMAX) };
+const partMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.17, 0), lam(0xffffff, true), PMAX);
+partMesh.count = 0; partMesh.frustumCulled = false; partMesh.castShadow = true; scene.add(partMesh);
+function splat(x, z, vol, gvol = 0) {
+  const fx = (x + HALF) / CELL, fz = (z + HALF) / CELL, xi = Math.floor(fx), zi = Math.floor(fz), tx = fx - xi, tz = fz - zi, v = vol / (CELL * CELL), gv = gvol / (CELL * CELL);
+  const put = (ax, az, w) => addHeight(ax, az, v * w, true, gv * w);
+  put(xi, zi, (1 - tx) * (1 - tz)); put(xi + 1, zi, tx * (1 - tz)); put(xi, zi + 1, (1 - tx) * tz); put(xi + 1, zi + 1, tx * tz);
+  touch(xi, zi);
+}
+// gvol is the part of the clod that is gravel (with vol 0 it only picks the colour)
+function spawnDirt(px, py, pz, vx, vy, vz, vol, gvol = 0) {
+  if (parts.n >= PMAX) { if (vol) splat(px, pz, vol, gvol); return; }
+  const i = parts.n++, o = i * 3;
+  parts.x[o] = px; parts.x[o + 1] = py; parts.x[o + 2] = pz; parts.v[o] = vx; parts.v[o + 1] = vy; parts.v[o + 2] = vz;
+  parts.vol[i] = vol; parts.g[i] = gvol; parts.s[i] = 0.7 + Math.random() * 0.9;
+}
+// vol 0 makes clods that are only for show (another player's dirt: their own game moves the ground)
+const _pv = new THREE.Vector3(), _pd = new THREE.Vector3();
+function pourFrom(matrix, vel, vol, gvol = 0) {
+  _pv.set((Math.random() - 0.5) * 2.6, 0.12, 0.85 + Math.random() * 0.45).applyMatrix4(matrix);
+  _pd.setFromMatrixColumn(matrix, 2).multiplyScalar(1 + Math.random() * 0.8);
+  spawnDirt(_pv.x, _pv.y, _pv.z, vel.x + _pd.x + (Math.random() - 0.5) * 0.5, vel.y + _pd.y, vel.z + _pd.z + (Math.random() - 0.5) * 0.5, vol, gvol);
+}
+function updateDirt() {
+  prepCatch();
+  for (let i = parts.n - 1; i >= 0; i--) {
+    const o = i * 3, x = parts.x, v = parts.v;
+    v[o + 1] -= 9.81 * DT;
+    x[o] += v[o] * DT; x[o + 1] += v[o + 1] * DT; x[o + 2] += v[o + 2] * DT;
+    let caught = false;
+    if (v[o + 1] < 0) {
+      for (const c of catchers) {
+        _rp.set(x[o], x[o + 1], x[o + 2]).applyMatrix4(c.inv);
+        if (Math.abs(_rp.x) < 1.2 && _rp.z > -3.0 && _rp.z < 1.3 && _rp.y > -0.3 && _rp.y < 2.4) {
+          caught = true;
+          if (parts.vol[i] > 0) {
+            if (c.who === 0) addLoad(parts.vol[i], parts.g[i]);
+            else { const pl = pendingLoad.get(c.who) || [0, 0]; pl[0] += parts.vol[i]; pl[1] += parts.g[i]; pendingLoad.set(c.who, pl); }
+          }
+          break;
+        }
+      }
+      if (!caught && hopper && Math.abs(x[o] - hopper.x) < 2.15 && Math.abs(x[o + 2] - hopper.z) < 2.15 && x[o + 1] < hopper.y0 + 1.5) {
+        caught = true;
+        if (parts.vol[i] > 0) { hopper.vol += parts.vol[i]; hopper.g += parts.g[i]; hopperD[0] += parts.vol[i]; hopperD[1] += parts.g[i]; }
+      }
+    }
+    if (!caught) {
+      if (x[o + 1] > heightAt(x[o], x[o + 2]) + 0.05) continue;
+      if (parts.vol[i] > 0) splat(x[o], x[o + 2], parts.vol[i], parts.g[i]);
+    }
+    const l = --parts.n, lo = l * 3;                               // remove by moving the last clod into this slot
+    x[o] = x[lo]; x[o + 1] = x[lo + 1]; x[o + 2] = x[lo + 2]; v[o] = v[lo]; v[o + 1] = v[lo + 1]; v[o + 2] = v[lo + 2];
+    parts.vol[i] = parts.vol[l]; parts.g[i] = parts.g[l]; parts.s[i] = parts.s[l];
+  }
+}
+let pourAcc = 0;
+
+// Put a volume of dirt on the ground under a point of the bucket (lz metres out from its back), spread across its width.
+function deposit(vol, lz, gvol = 0) {
+  for (const lx of [-1.1, -0.37, 0.37, 1.1]) {
+    _rp.set(lx, 0, lz).applyMatrix4(_bw);
+    splat(_rp.x, _rp.z, vol / 4, gvol / 4);
+  }
+}
+
+// Digging: ground that pokes up through the bucket floor is cut away. It fills the bucket first;
+// once the bucket is full the rest is shoved ahead of the lip like a bulldozer.
+const _bp = new THREE.Vector3();
+function digStep() {
+  const P = _bp.setFromMatrixPosition(_bw);
+  let cut = 0, cutFirm = 0, cutG = 0;
+  // firm ground only gives way to a moving blade or a bucket being pushed down: a stalled loader doesn't sink a pit
+  const bite = Math.max(clamp(Math.abs(me.speed) / 1.2, 0, 1), input.arm < 0 ? 1 : 0);
+  if (me.tilt > -0.1 && _up.y > 0.35 && P.y - heightAt(P.x, P.z) < 3) {      // a bucket tipped to dump doesn't cut
+    let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
+    for (const [lx, lz] of [[-1.5, -0.15], [1.5, -0.15], [-1.5, 1.4], [1.5, 1.4]]) {
+      _rp.set(lx, 0, lz).applyMatrix4(_bw);
+      x0 = Math.min(x0, _rp.x); x1 = Math.max(x1, _rp.x); z0 = Math.min(z0, _rp.z); z1 = Math.max(z1, _rp.z);
+    }
+    const xa = Math.ceil((x0 + HALF) / CELL), xb = Math.floor((x1 + HALF) / CELL), za = Math.ceil((z0 + HALF) / CELL), zb = Math.floor((z1 + HALF) / CELL);
+    for (let xi = xa; xi <= xb; xi++) for (let zi = za; zi <= zb; zi++) {
+      if (xi < 1 || zi < 1 || xi >= G || zi >= G) continue;
+      const wx = xi * CELL - HALF, wz = zi * CELL - HALF;
+      const top = P.y - (_up.x * (wx - P.x) + _up.z * (wz - P.z)) / _up.y;        // height of the bucket floor above this spot
+      _rp.set(wx, top, wz).applyMatrix4(_bi);
+      if (Math.abs(_rp.x) > 1.5 || _rp.z < -0.15 || _rp.z > 1.4) continue;
+      const i = zi + xi * W, over = heights[i] - (top - 0.05);
+      if (over <= 0.02) continue;
+      // loose dirt scoops up fast; firm ground is shaved a little at a time, so the bucket can't bury itself
+      const soft = Math.min(over, Math.max(0, heights[i] - firm[i]), L.looseRate * DT);
+      const hard = !rockA[i] && heights[i] - soft - firm[i] < 1e-3 ? Math.min(over - soft, L.firmRate * bite * DT) : 0;
+      cut -= addHeight(xi, zi, -(soft + hard)) * CELL * CELL; cutG += lastG * CELL * CELL; cutFirm += hard * CELL * CELL; touch(xi, zi);
+    }
+  }
+  me.cut = cut;
+  if (cut > 0) {
+    const take = Math.min(cut, L.capacity - me.load), takeG = (cutG * take) / cut;
+    me.load += take; me.loadG += takeG;
+    if (cut - take > 1e-4) deposit(cut - take, 2.1, cutG - takeG);
+    const v = chassis.linvel(), sp = Math.hypot(v.x, v.z);                          // moving dirt is hard work: it slows the loader
+    if (sp > 0.05) { const j = Math.min(L.loadDrag * take + L.pushDrag * (cut - take) + L.firmDrag * cutFirm, L.mass * sp * 0.3) / sp; chassis.applyImpulse({ x: -v.x * j, y: 0, z: -v.z * j }, true); }
+  }
+  if (me.tilt < -0.12 && me.load > 0) {                                             // dirt starts sliding out as soon as the bucket tips forward
+    const out = Math.min(me.load, L.pour * DT * clamp((-0.12 - me.tilt) / 0.45, 0.25, 1));
+    const gf = clamp(me.loadG / me.load, 0, 1);
+    me.load -= out; me.loadG = Math.max(0, me.loadG - out * gf); if (me.load < 1e-3) { me.load = 0; me.loadG = 0; }
+    pourAcc += out;
+    const v = chassis.linvel();
+    while (pourAcc >= PVOL || (me.load === 0 && pourAcc > 1e-5)) { const vol = Math.min(PVOL, pourAcc); pourAcc -= vol; pourFrom(_bw, v, vol, vol * gf); }
+  }
+}
+
+// Grip: steep slopes and mud make the tyres slide. Mud also drags.
+let gripNow = 1;
+function groundStep() {
+  const t = chassis.translation(), mud = mudAt(t.x, t.z), slope = slopeAt(t.x, t.z);
+  const deep = mud * smooth(-0.35, -0.85, heightAt(t.x, t.z));          // down in the creek bed, under the water: very sticky
+  const m1 = Math.min(1, mud), bog = Math.max(0, mud - 1);            // mud above 1 is swamp: it all but stops a loader
+  gripNow = (1 - 0.88 * smooth(0.42, 0.63, slope)) * (1 - 0.5 * m1 - 0.3 * deep) * (1 - 0.55 * bog);
+  for (let i = 0; i < 4; i++) vehicle.setWheelFrictionSlip(i, L.slip * gripNow);
+  if (mud > 0.05) {
+    const v = chassis.linvel(), j = Math.min(0.5, (4500 * m1 + 17000 * deep + 70000 * bog) * (me.kind === "truck" ? 1 + me.load / 6 : 1) * DT / L.mass) * L.mass;   // a loaded truck sinks
+    chassis.applyImpulse({ x: -v.x * j, y: 0, z: -v.z * j }, true);
+  }
+}
+
+// Road roller: any rock that gets under the front drum is crushed into a patch of gravel.
+const _ci = new THREE.Matrix4(), _bwr = new THREE.Matrix4();
+function rollStep(speed) {
+  if (Math.abs(speed) < 0.3) return;
+  const t = chassis.translation(), r = chassis.rotation();
+  _bwr.compose(_cp.set(t.x, t.y, t.z), _cq.set(r.x, r.y, r.z, r.w), _one);
+  _ci.copy(_bwr).invert();
+  for (const k of props) {
+    if (!k.active || k.type !== "rock" || (net.online && k.owner !== net.id && k.owner !== 0)) continue;
+    const p = k.body.translation();
+    if (Math.abs(p.x - t.x) > 6 || Math.abs(p.z - t.z) > 6) { k.squash = 0; continue; }
+    _rp.set(p.x, p.y, p.z).applyMatrix4(_ci);
+    const under = Math.abs(_rp.x) < 1.5 + k.r * 0.4 && _rp.y < 0.6 && ((_rp.z > 0.4 && _rp.z < 2.8 + k.r) || (_rp.z < -0.4 && _rp.z > -2.6 - k.r));
+    k.squash = under ? (k.squash || 0) + DT : 0;
+    if (k.squash > 0.22) { k.squash = 0; layGravel(k.index, p.x, p.z, k.r); }
+  }
+  // the drums also flatten loose ground: bumps are pressed down into the hollows beside them,
+  // and what they roll over is packed firm (it stops slumping)
+  const k = Math.min(1, Math.abs(speed) / 2) * 5 * DT;
+  for (const [dz, hw] of [[1.7, 1.35], [-1.5, 1.15]]) flattenUnder(hw, dz, k);
+}
+const _fl = [];
+function flattenUnder(hw, dz, k) {
+  _fl.length = 0;
+  let sum = 0;
+  for (let lx = -hw + 0.25; lx < hw; lx += CELL) for (let lz = dz - 0.5; lz <= dz + 0.5; lz += CELL) {
+    _rp.set(lx, 0, lz).applyMatrix4(_bwr);
+    const xi = Math.round((_rp.x + HALF) / CELL), zi = Math.round((_rp.z + HALF) / CELL);
+    if (xi < 1 || zi < 1 || xi >= G || zi >= G) continue;
+    const i = zi + xi * W;
+    if (_fl.includes(i)) continue;
+    _fl.push(i); sum += heights[i];
+  }
+  if (_fl.length < 4) return;
+  const mean = sum / _fl.length;
+  let down = 0, upWant = 0;
+  for (const i of _fl) { const d = heights[i] - mean; if (d > 0) down += Math.min(d * k, Math.max(0, heights[i] - firm[i])); else upWant += -d * k; }
+  const scale = upWant > 1e-6 ? Math.min(1, down / upWant) : 0, upGot = upWant * scale, take = upGot / Math.max(down, 1e-9);
+  let gRem = 0;
+  for (const i of _fl) {
+    const d = heights[i] - mean;
+    if (d > 0) { const c = Math.min(d * k, Math.max(0, heights[i] - firm[i])) * take; if (c > 1e-5) { addHeight(Math.floor(i / W), i % W, -c); gRem += lastG; } }
+  }
+  const gShare = upGot > 1e-6 ? gRem / upGot : 0;          // the part of what was pressed down that was gravel
+  for (const i of _fl) {
+    const xi = Math.floor(i / W), zi = i % W, d = heights[i] - mean;
+    if (d < 0 && scale > 0) { const a = -d * k * scale; addHeight(xi, zi, a, true, a * gShare); }
+    if (loose[i] && Math.abs(heights[i] - mean) < 0.06) firm[i] = Math.max(firm[i], heights[i] - 0.02);       // packed once it is level
+  }
+}
+function switchPad() {
+  const t = chassis.translation();
+  if (SITE === "hub") { const gh = houses.find((h) => h.garage); return gh && gh.b.inside(t.x, t.z) ? "garage" : null; }
+  return YARDS.some((y) => Math.hypot(t.x - y.x, t.z - y.z) < y.r) ? "vehicle yard" : null;
+}
+function inPaintShop() {
+  if (SITE !== "hub") return false;
+  const t = chassis.translation(), ps = houses.find((h) => h.paint);
+  return !!ps && ps.b.inside(t.x, t.z);
+}
+const rollerUnlocked = () => testUnlock || SITE === "river" || SITE === "ridge" || !!(progress.farm && progress.farm.done);
+const truckUnlocked = () => testUnlock || SITE === "haul" || SITE === "flood" || !!(progress.haul && progress.haul.done);
+const KIND_ORDER = ["loader", "roller", "truck"];
+const kindOpen = (k) => k === "loader" || (k === "roller" ? rollerUnlocked() : truckUnlocked());
+function nextKind() {
+  const i = KIND_ORDER.indexOf(me.kind);
+  for (let n = 1; n < KIND_ORDER.length; n++) { const k = KIND_ORDER[(i + n) % KIND_ORDER.length]; if (kindOpen(k)) return k; }
+  return null;
+}
+const KIND_TIPS = { loader: "Bucket and winch.", roller: "Drive over rocks to crush them, and over loose ground to flatten and pack it. No bucket, same winch.",
+  truck: "Carries 18 m\u00b3. Raise the bed with \u2192 to pour it out the back, lower it with \u2190. Fill up under a hopper chute or from a friend's loader." };
+function switchVehicle() {
+  if (!switchPad() || Math.abs(me.speed) > 2) return;
+  const next = nextKind();
+  if (!next) return showBanner("<b>No other vehicles yet</b>Finish Muddle Acres to unlock the road roller.", 3500);
+  if (me.load > 0) { if (me.kind === "loader") deposit(me.load, 1.6, me.loadG); else { const t = chassis.translation(); splat(t.x, t.z, me.load, me.loadG); } me.load = 0; me.loadG = 0; }
+  me.bed = 0;
+  setKind(me, next);
+  try { localStorage.setItem("jobsite-kind", next); } catch {}
+  showBanner(`<b>${KINDS[next].name[0].toUpperCase() + KINDS[next].name.slice(1)}</b>${KIND_TIPS[next]}`, 4500);
+}
+
+// the truck pours out of the back of its bed; clods from loaders (and hoppers) land in beds and bins
+const _tw = new THREE.Matrix4(), _tv = new THREE.Vector3(), _tf = new THREE.Vector3();
+function truckPose(ld, out) { const t = ld.body.translation(), r = ld.body.rotation(); return out.compose(_cp.set(t.x, t.y, t.z), _cq.set(r.x, r.y, r.z, r.w), _one); }
+function truckPour(ld, vol, gvol, vel) {
+  truckPose(ld, _tw);
+  _tv.set((Math.random() - 0.5) * 2.2, 0.3 + Math.random() * 0.5, -3.2).applyMatrix4(_tw);
+  _tf.setFromMatrixColumn(_tw, 2).multiplyScalar(-(1.0 + Math.random()));
+  spawnDirt(_tv.x, _tv.y, _tv.z, vel.x + _tf.x, vel.y - 0.4, vel.z + _tf.z, vol, gvol);
+}
+function addLoad(v, g) {
+  const cap = KINDS.truck.cap, take = Math.min(v, cap - me.load);
+  if (take <= 0) return;
+  me.load += take; me.loadG += (g * take) / v;
+}
+const catchers = [], pendingLoad = new Map();
+function prepCatch() {
+  catchers.length = 0;
+  const add = (ld, who) => { if (ld.kind !== "truck" || (ld.bed || 0) > 0.3) return; catchers.push({ inv: truckPose(ld, new THREE.Matrix4()).invert(), who }); };
+  if (me.load < KINDS.truck.cap - 0.01) add(me, 0);
+  for (const pr of net.peers.values()) if (pr.seen) add(pr.loader, pr.id);
+}
+function truckStep() {
+  me.bed = clamp((me.bed || 0) - input.tilt * 0.55 * DT, 0, 0.95);
+  if (me.bed > 0.45 && me.load > 0) {
+    const out = Math.min(me.load, 3.4 * DT * clamp((me.bed - 0.45) / 0.3, 0.3, 1)), gf = clamp(me.loadG / me.load, 0, 1);
+    me.load -= out; me.loadG = Math.max(0, me.loadG - out * gf); if (me.load < 1e-3) { me.load = 0; me.loadG = 0; }
+    pourAcc += out;
+    const v = chassis.linvel(), step = PVOL * 1.5;
+    while (pourAcc >= step || (me.load === 0 && pourAcc > 1e-5)) { const vol = Math.min(step, pourAcc); pourAcc -= vol; truckPour(me, vol, vol * gf, v); }
+  }
+}
+
+function driveStep() {
+  const KV = KINDS[me.kind], isLoader = me.kind === "loader";
+  if (isLoader) {
+    me.arm = clamp(me.arm + input.arm * 0.55 * DT, L.armMin, L.armMax);
+    me.tilt = clamp(me.tilt + input.tilt * 1.5 * DT, L.tiltMin, L.tiltMax);
+  }
+  poseBucket(me);
+  bucketFrame();
+
+  const speed = me.speed = vehicle.currentVehicleSpeed();
+  if (isLoader) { scoopAssist(speed); digStep(); } else if (me.kind === "roller") rollStep(speed); else truckStep();
+  groundStep();
+  const against = input.fwd !== 0 && Math.sign(input.fwd) !== Math.sign(speed) && Math.abs(speed) > 1.2;
+  const top = input.fwd > 0 ? KV.maxSpeed : KV.reverseSpeed;
+  const heavy = me.kind === "truck" ? 1 / (1 + (0.6 * me.load) / KV.cap) : 1;          // a full truck is slow uphill
+  const force = input.fwd !== 0 && !against && !input.brake ? input.fwd * KV.engine * heavy * clamp(1.15 - Math.abs(speed) / top, 0, 1) : 0;
+  const brake = input.brake || against ? L.brake : input.fwd === 0 ? L.idleBrake : 0;
+  const steerTarget = input.turn * KV.steer * lerp(1, 0.55, clamp(Math.abs(speed) / L.maxSpeed, 0, 1));
+  me.steer += clamp(steerTarget - me.steer, -2.2 * DT, 2.2 * DT);
+  for (let i = 0; i < 4; i++) {
+    vehicle.setWheelEngineForce(i, force);
+    vehicle.setWheelBrake(i, brake);
+    vehicle.setWheelSteering(i, me.wheels[i].front ? me.steer : 0);
+  }
+  vehicle.updateVehicle(DT, undefined, undefined, notChassis);
+}
+
+function placeLoader(x, z, yaw) {
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw);
+  chassis.setTranslation({ x, y: heightAt(x, z) + 2.2, z }, true);
+  chassis.setRotation({ x: q.x, y: q.y, z: q.z, w: q.w }, true);
+  chassis.setLinvel({ x: 0, y: 0, z: 0 }, true);
+  chassis.setAngvel({ x: 0, y: 0, z: 0 }, true);
+}
+function resetLoader() {
+  const t = chassis.translation();
+  hookOff();
+  placeLoader(clamp(t.x, -HALF + 8, HALF - 8), clamp(t.z, -HALF + 8, HALF - 8), heading());
+}
+
+// ---------- winch ----------
+// A rope from the hook on the back of the loader to a prop, a fixed anchor or another loader.
+// It is a stiff spring that only pulls, capped at the winch's strength; Q shortens it, X lets it out.
+const winch = { on: false, kind: 0, ref: 0, local: new THREE.Vector3(), len: 0, T: 0, name: "" };
+let target = null;
+const _wa = new THREE.Vector3(), _wb = new THREE.Vector3(), _wd = new THREE.Vector3(), _wv = new THREE.Vector3(), _wv2 = new THREE.Vector3(), _wl = new THREE.Vector3();
+// kind 1 prop (ref index, local point), 2 fixed anchor (ref index), 3 player (ref id)
+function anchorPos(kind, ref, local, out) {
+  if (kind === 1) { const p = props[ref]; return p && p.active ? bodyPoint(p.body, local, out) : null; }
+  if (kind === 2) { const a = anchors[ref]; return a ? out.copy(a.pos) : null; }
+  if (kind === 3) {
+    if (ref === net.id) return bodyPoint(chassis, ZV, out);
+    const pr = net.peers.get(ref);
+    return pr && pr.seen ? bodyPoint(pr.loader.body, ZV, out) : null;
+  }
+  return null;
+}
+function pointVel(body, pt, out) {
+  const v = body.linvel(), w = body.angvel(), c = body.translation();
+  const rx = pt.x - c.x, ry = pt.y - c.y, rz = pt.z - c.z;
+  return out.set(v.x + w.y * rz - w.z * ry, v.y + w.z * rx - w.x * rz, v.z + w.x * ry - w.y * rx);
+}
+function findTarget() {
+  const A = bodyPoint(chassis, HOOK, _wa), h = heading(), bx = -Math.sin(h), bz = -Math.cos(h);
+  let best = null, bestScore = Infinity;
+  const consider = (kind, ref, local, pos, name) => {
+    const dx = pos.x - A.x, dy = pos.y - A.y, dz = pos.z - A.z, dist = Math.hypot(dx, dy, dz), hd = Math.hypot(dx, dz);
+    if (dist > WINCH.max || dist < 1.2 || hd < 0.5) return;
+    const dot = (dx * bx + dz * bz) / hd;
+    if (dot < 0.35) return;
+    const score = dist * (1 + 3 * (1 - dot));          // whatever is most squarely behind wins over something just closer
+    if (score < bestScore) { bestScore = score; best = { kind, ref, local: local ? local.clone() : new THREE.Vector3(), pos: pos.clone(), name, dist }; }
+  };
+  for (const p of props) {
+    if (!p.active) continue;
+    for (const lp of p.anchorsLocal) consider(1, p.index, lp, bodyPoint(p.body, lp, _wb), p.name);
+  }
+  anchors.forEach((a, i) => consider(2, i, null, a.pos, a.name));
+  for (const pr of net.peers.values()) if (pr.seen) consider(3, pr.id, ZV, bodyPoint(pr.loader.body, ZV, _wb), pr.name + "'s loader");
+  return best;
+}
+function hookOn(t) {
+  Object.assign(winch, { on: true, kind: t.kind, ref: t.ref, name: t.name, T: 0 });
+  winch.local.copy(t.local);
+  winch.len = Math.min(WINCH.max, t.dist + 0.3);
+}
+function hookOff() { winch.on = false; winch.T = 0; }
+function toggleWinch() {
+  if (winch.on) return hookOff();
+  const t = findTarget();
+  if (t) hookOn(t);
+}
+// one rope's pull, as a spring: k and c are scaled by the masses so it stays stable for a light log or a fixed tree
+function ropeTension(len, A, vA, B, vB, mEff) {
+  _wd.subVectors(B, A);
+  const d = _wd.length();
+  if (d < 1e-4) return 0;
+  _wd.divideScalar(d);
+  const k = mEff * 25, c = mEff * 7, stretch = d - len;
+  if (stretch <= 0) return 0;
+  const vrel = (vB.x - vA.x) * _wd.x + (vB.y - vA.y) * _wd.y + (vB.z - vA.z) * _wd.z;
+  return clamp(k * stretch + c * vrel, 0, WINCH.tmax);
+}
+function winchStep() {
+  if (winch.on) {
+    const B = anchorPos(winch.kind, winch.ref, winch.local, _wb);
+    if (!B) hookOff();
+    else {
+      const A = bodyPoint(chassis, HOOK, _wa);
+      if (input.reel > 0) winch.len -= WINCH.reelIn * DT;
+      else if (input.reel < 0) winch.len += WINCH.payOut * DT;
+      const prop = winch.kind === 1 ? props[winch.ref] : null, dyn = !!prop && prop.body.isDynamic();
+      const mB = dyn ? prop.body.mass() : Infinity, mEff = mB === Infinity ? L.mass : (L.mass * mB) / (L.mass + mB);
+      const d = A.distanceTo(B);
+      winch.len = clamp(Math.max(winch.len, d - (WINCH.tmax / (mEff * 25)) * 1.1), WINCH.min, WINCH.max);   // a stalled winch doesn't store a huge stretch
+      const vA = pointVel(chassis, A, _wv), vB = dyn ? pointVel(prop.body, B, _wv2) : _wv2.set(0, 0, 0);
+      const T = (winch.T = ropeTension(winch.len, A, vA, B, vB, mEff));
+      if (T > 0) {
+        const J = T * DT;
+        chassis.applyImpulseAtPoint({ x: _wd.x * J, y: _wd.y * J, z: _wd.z * J }, { x: A.x, y: A.y, z: A.z }, true);
+        if (dyn) prop.body.applyImpulseAtPoint({ x: -_wd.x * J, y: -_wd.y * J, z: -_wd.z * J }, { x: B.x, y: B.y, z: B.z }, true);
+      }
+    }
+  }
+  // other players' ropes hooked to me: my game pulls my loader towards their hook
+  for (const pr of net.peers.values()) {
+    const h = pr.h;
+    if (!h || h[0] !== 3 || h[1] !== net.id || !pr.seen) continue;
+    const A = bodyPoint(pr.loader.body, HOOK, _wa), B = bodyPoint(chassis, ZV, _wb), vB = pointVel(chassis, B, _wv2);
+    const T = ropeTension(h[5], A, _wv.set(0, 0, 0), B, vB, L.mass * 0.5);
+    if (T > 0) { const J = T * DT; chassis.applyImpulse({ x: -_wd.x * J, y: -_wd.y * J, z: -_wd.z * J }, true); }
+  }
+}
+// Parking brake: stopped with Space held, the loader digs its tyres in and holds against a heavy
+// pull (the wheel brakes alone give way around 25 kN). Mud and slopes weaken it.
+function parkStep() {
+  if (!input.brake || input.fwd !== 0) return;
+  const v = chassis.linvel(), sp = Math.hypot(v.x, v.z);
+  if (sp > 1.5 || sp < 1e-4) return;
+  const j = Math.min(L.mass * sp, L.park * gripNow * DT) / sp;
+  chassis.applyImpulse({ x: -v.x * j, y: 0, z: -v.z * j }, true);
+}
+// the rope's tension on a prop from everyone's winches (used for the stump)
+function pullOn(prop) {
+  let T = winch.on && winch.kind === 1 && winch.ref === prop.index ? winch.T : 0;
+  for (const pr of net.peers.values()) if (pr.h && pr.h[0] === 1 && pr.h[1] === prop.index) T += pr.h[6] || 0;
+  return T;
+}
+
+// ---------- level state ----------
+const FL = { stump: 1, logs: 2, boulders: 4, fill: 8, open: 16, done: 32, tractor: 64 };
+let flags = 0;
+const job = { time: 0, fill: 0, logsIn: 0, bouldersIn: 0, stumpPull: 0, stuck: 0, moved: false, ended: false, water: SITE === "flood" ? FLOOD.water.start : 0, hold: 0, crest: null, floodVis: 0, cover: 0 };
+function sinkDeficit() { let d = 0; for (let k = 0; k < sinkIdx.length; k++) d += Math.max(0, sinkTarget[k] - heights[sinkIdx[k]]); return d * CELL * CELL; }
+const SINK_START = SITE === "farm" ? sinkDeficit() : 1;
+function setFlag(f) { if (flags & f) return; flags |= f; onFlag(f); }
+const RIDGE_BANNER = { 2: "<b>Landslide cleared!</b>The road is open as far as the gully.", 4: "<b>Gully filled!</b>You can tow the cabin up to the last climb.",
+  1: "<b>Firewood delivered!</b>Bonus job done.", 64: "<b>Every rock crushed!</b>Bonus job done." };
+const SITE_BANNER = {
+  haul: { 1: "<b>Picnic tables delivered!</b>Bonus job done.", 2: "<b>Pit road open!</b>The gravel pit and its hopper are yours.",
+    4: "<b>Ford graveled!</b>A loaded truck can cross the stream now.", 64: "<b>Hairpin graveled!</b>Bonus job done." },
+  flood: { 1: "<b>Both cars rescued!</b>Bonus job done.", 4: "<b>Floodgate closed!</b>", 8: "<b>All three breaches plugged!</b>Hold on until the river peaks." },
+};
+function onFlag(f) {
+  if (SITE === "ridge" && RIDGE_BANNER[f]) showBanner(RIDGE_BANNER[f], 5000);
+  if (f === FL.stump && stump) { stump.body.setBodyType(RAPIER.RigidBodyType.Dynamic, true); showBanner("<b>Stump pulled!</b>Bonus job done.", 4000); }
+  if (SITE_BANNER[SITE] && SITE_BANNER[SITE][f]) showBanner(SITE_BANNER[SITE][f], 5000);
+  if (SITE === "flood" && f === 4) lockGate();
+  if (f === FL.tractor && (SITE === "farm" || SITE === "river")) showBanner(SITE === "river" ? "<b>Every rock crushed!</b>Bonus job done." : "<b>Tractor rescued!</b>Bonus job done.", 4000);
+  if (SITE === "river" && f === FL.logs) showBanner("<b>Causeway built!</b>You can drive across the river now.", 5000);
+  if (SITE === "river" && f === FL.boulders) showBanner("<b>Gravel road laid!</b>Go and fetch the generator.", 5000);
+  if (f === FL.stump && SITE === "river") showBanner("<b>Toolbox recovered!</b>Bonus job done.", 4000);
+  if (f === FL.open && barnDoor) {
+    world.removeCollider(barnDoor.userData.collider, false); barnDoor.userData.open = true; barnBeam.visible = true;
+    barn.sign.userData.draw("Barn", "Open: winch up the hill!", "#8be28b");
+    showBanner("<b>The barn is open!</b>Winch your way up the hill and drive inside to finish.", 6500);
+  }
+  if (f === FL.done) finishLevel();
+}
+
+// ---------- multiplayer ----------
+// Each player simulates their own loader and the props near it, and sends both 20 times a second.
+// The room server only relays. The longest-connected player ("host") looks after props nobody is near,
+// brings newcomers up to date, and saves the site to the room.
+const net = { ws: null, id: 0, online: false, room: "", roster: [], peers: new Map(), hostId: 0, lastSave: 0 };
+const elRoster = document.getElementById("roster");
+let progress = {};
+try { progress = JSON.parse(localStorage.getItem("jobsite-progress") || "{}") || {}; } catch {}
+
+function buildSync() {
+  const rk = [], tr = [];
+  for (const r of props) { const p = r.body.translation(), q = r.body.rotation(); rk.push(r3(p.x), r3(p.y), r3(p.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w)); }
+  for (let i = 0; i < heights.length; i++) if (heights[i] !== base[i]) tr.push(i, Math.round(heights[i] * 1000));
+  const gt = [];
+  for (let i = 0; i < gravH.length; i++) if (gravH[i] > 0.001) gt.push(i, Math.round(gravH[i] * 1000));
+  return { t: "sync", ver: SYNC_VER, site: SITE, rk, tr, time: Math.round(job.time), flags, nb: activeBoulders, gv: gravel, gt, hop: hopper ? [r3(hopper.vol), r3(hopper.g)] : null, wl: job.water, wh: job.hold };
+}
+function applySync(s) {
+  if (!s || s.ver !== SYNC_VER || s.site !== SITE || !Array.isArray(s.rk) || !Array.isArray(s.tr)) return;
+  for (let k = 0; k + 1 < s.tr.length; k += 2) {
+    const i = s.tr[k];
+    if (i > 0 && i < heights.length) { heights[i] = s.tr[k + 1] / 1000; firm[i] = Math.min(firm[i], heights[i]); loose[i] = 1; markDirty(Math.floor(i / W), i % W); }
+  }
+  flushTerrain();
+  if (SITE === "farm") setActiveBoulders(Math.max(activeBoulders, s.nb || 5));
+  if (Array.isArray(s.gv)) for (const g of s.gv) markCrushed(g);
+  if (Array.isArray(s.gt)) for (let k = 0; k + 1 < s.gt.length; k += 2) { const i = s.gt[k]; if (i > 0 && i < gravH.length) { gravH[i] = s.gt[k + 1] / 1000; markDirty(Math.floor(i / W), i % W); } }
+  flushTerrain();
+  for (let f = 1; f <= 64; f <<= 1) if (s.flags & f && f !== FL.done) setFlag(f);
+  for (let n = 0; n < props.length && n * 7 + 6 < s.rk.length; n++) {
+    const a = s.rk, o = n * 7, b = props[n].body;
+    b.setTranslation({ x: a[o], y: a[o + 1], z: a[o + 2] }, true); b.setRotation({ x: a[o + 3], y: a[o + 4], z: a[o + 5], w: a[o + 6] }, true);
+    if (b.isDynamic()) { b.setLinvel({ x: 0, y: 0, z: 0 }, true); b.setAngvel({ x: 0, y: 0, z: 0 }, true); }
+  }
+  job.time = s.time || 0;
+  if (Array.isArray(s.hop) && hopper) { hopper.vol = +s.hop[0] || 0; hopper.g = +s.hop[1] || 0; }
+  if (SITE === "flood" && typeof s.wl === "number") { job.water = s.wl; job.hold = +s.wh || 0; }
+}
+
+function setRoster(list) {
+  const known = new Set(net.roster.map((p) => p.id));
+  net.roster = list;
+  net.hostId = list.length ? Math.min(...list.map((p) => p.id)) : 0;
+  for (const p of list) {
+    if (p.id === net.id || net.peers.has(p.id)) continue;
+    net.peers.set(p.id, { id: p.id, name: p.name, loader: makeLoader(p.slot, false), snaps: [], pos: new THREE.Vector3(1e6, 0, 1e6), seen: false, h: null });
+    if (net.hostId === net.id && !known.has(p.id)) send({ t: "to", to: p.id, m: buildSync() });      // bring the newcomer up to date
+  }
+  for (const [id, peer] of net.peers) if (!list.some((p) => p.id === id)) { disposeLoader(peer.loader); net.peers.delete(id); }
+  if (SITE === "farm" && list.length) setActiveBoulders(Math.max(activeBoulders, 5 * list.length));     // five boulders per player
+  renderRoster();
+}
+// the colour chip next to each name matches that player's paint job
+function renderRoster() {
+  elRoster.style.display = net.online ? "block" : "none";
+  const chip = (p) => { const ld = p.id === net.id ? me : net.peers.get(p.id) && net.peers.get(p.id).loader; return ld ? ld.paint.color.getHexString() : COLORS[p.slot].toString(16).padStart(6, "0"); };
+  elRoster.innerHTML = `<h2>Room ${net.room}</h2>` + net.roster.map((p) => `<div><i style="background:#${chip(p)}"></i>${esc(p.name)}${p.id === net.id ? " (you)" : ""}${p.id === net.hostId ? " &#9733;" : ""}</div>`).join("");
+}
+function send(m) { if (net.ws && net.ws.readyState === 1) net.ws.send(JSON.stringify(m)); }
+
+function connect(room, name) {
+  return new Promise((resolve, reject) => {
+    const ws = new WebSocket(`${SERVER}/rooms/${room}/ws`);
+    let done = false;
+    const fail = (why) => { if (!done) { done = true; reject(new Error(why)); } };
+    ws.onopen = () => ws.send(JSON.stringify({ t: "hello", name }));
+    ws.onerror = () => fail("Could not reach the room server.");
+    ws.onclose = () => {
+      fail("The room server closed the connection.");
+      if (net.online) { net.online = false; setRoster([]); showBanner("<b>Disconnected</b>You can keep playing on your own.", 6000); }
+    };
+    ws.onmessage = (e) => {
+      let d; try { d = JSON.parse(e.data); } catch { return; }
+      if (d.t === "full") return fail("That room is full (4 players).");
+      if (d.t === "welcome") {
+        if (d.site && d.site !== SITE) { location.replace(`?site=${d.site}&room=${room}`); return; }     // the crew is on another site: go there
+        Object.assign(net, { ws, id: d.id, online: true, room });
+        if (d.progress) { try { progress = JSON.parse(d.progress) || {}; } catch {} }
+        me.slot = d.slot; applyLook(me, myLook);
+        const s = spawnAt(d.slot); placeLoader(s.x, s.z, s.yaw);
+        if (d.save && d.roster.length === 1) { try { applySync(JSON.parse(d.save)); } catch {} }
+        setRoster(d.roster);
+        refreshSigns();
+        done = true; resolve();
+      } else if (d.t === "roster") setRoster(d.roster);
+      else if (d.t === "site") { if (d.site !== SITE) location.replace(`?site=${d.site}&room=${net.room}`); }
+      else if (d.m) onPeerMessage(d.f, d.m);
+    };
+  });
+}
+
+function onPeerMessage(from, m) {
+  if (m.t === "sync") return applySync(m);
+  if (m.t === "ld") { if (me.kind === "truck") addLoad(+m.v || 0, +m.g || 0); return; }      // a friend tipped their bucket into my truck
+  const peer = net.peers.get(from);
+  if (m.t !== "s" || !peer) return;
+  peer.snaps.push({ at: performance.now(), p: m.p, q: m.q, a: m.a, b: m.b, w: m.w, l: m.l, v: m.v, bd: m.bd || 0 });
+  if (Array.isArray(m.hd) && hopper) { hopper.vol = Math.max(0, hopper.vol + m.hd[0]); hopper.g = clamp(hopper.g + m.hd[1], 0, hopper.vol); }
+  if (SITE === "flood" && typeof m.wl === "number" && from === net.hostId) { if (job.water - m.wl > 0.3) floodShow(); job.water = m.wl; job.hold = +m.wh || 0; }
+  if (peer.snaps.length > 12) peer.snaps.shift();
+  peer.pos.set(m.p[0], m.p[1], m.p[2]);
+  peer.h = Array.isArray(m.h) ? m.h : null;
+  setKind(peer.loader, KIND_ORDER[m.k] || "loader");
+  if (Array.isArray(m.lk)) {
+    const key = m.lk.join(",");
+    if (key !== peer.lookKey) { peer.lookKey = key; applyLook(peer.loader, cleanLook(m.lk)); renderRoster(); }
+  }
+  if (m.fl) for (let f = 1; f <= 64; f <<= 1) if (m.fl & f) setFlag(f);
+  if (SITE === "farm" && m.nb > activeBoulders) setActiveBoulders(m.nb);
+  if (Array.isArray(m.gv)) for (const g of m.gv) markCrushed(g);
+  if (m.eg) for (let k = 0; k + 1 < m.eg.length; k += 2) { const i = m.eg[k]; if (i > 0 && i < gravH.length) { gravH[i] = Math.max(0, gravH[i] + m.eg[k + 1] / 1000); markDirty(Math.floor(i / W), i % W); } }
+  if (m.e) for (let k = 0; k + 1 < m.e.length; k += 2) { const i = m.e[k]; addHeight(Math.floor(i / W), i % W, m.e[k + 1] / 1000, false); }
+  if (m.r) for (let k = 0; k + 13 < m.r.length; k += 14) {
+    const a = m.r, prop = props[a[k]];
+    if (!prop || !prop.active || !prop.body.isDynamic()) continue;
+    if (winch.on && winch.kind === 1 && winch.ref === prop.index) continue;      // I'm pulling it: mine wins
+    if (prop.owner === net.id && net.id < from) continue;                        // we both claim it: the lower id wins
+    prop.owner = from;
+    const b = prop.body;
+    b.setTranslation({ x: a[k + 1], y: a[k + 2], z: a[k + 3] }, true); b.setRotation({ x: a[k + 4], y: a[k + 5], z: a[k + 6], w: a[k + 7] }, true);
+    b.setLinvel({ x: a[k + 8], y: a[k + 9], z: a[k + 10] }, true); b.setAngvel({ x: a[k + 11], y: a[k + 12], z: a[k + 13] }, true);
+  }
+}
+
+// A prop belongs to whoever is winching it, else the nearest loader within reach, else the host.
+function updateOwnership() {
+  const t = chassis.translation();
+  for (const r of props) {
+    if (!r.active || !r.body.isDynamic()) continue;
+    if (winch.on && winch.kind === 1 && winch.ref === r.index) { r.owner = net.id; continue; }
+    let pulled = 0;
+    for (const pr of net.peers.values()) if (pr.h && pr.h[0] === 1 && pr.h[1] === r.index) pulled = pr.id;
+    if (pulled) { r.owner = pulled; continue; }
+    const p = r.body.translation();
+    const dist = (id) => { if (id === net.id) return Math.hypot(p.x - t.x, p.z - t.z); const pr = net.peers.get(id); return pr ? Math.hypot(p.x - pr.pos.x, p.z - pr.pos.z) : 1e9; };
+    if (r.owner && dist(r.owner) < 8 + r.r) continue;
+    let best = net.hostId, bd = 5.5 + r.r;
+    for (const pl of net.roster) { const d = dist(pl.id); if (d < bd) { bd = d; best = pl.id; } }
+    r.owner = best;
+  }
+}
+
+let stepCount = 0;
+function sendState() {
+  const t = chassis.translation(), q = chassis.rotation(), rk = [], e = [];
+  const tick = stepCount / 3;
+  for (const r of props) {
+    if (!r.active || r.owner !== net.id || !r.body.isDynamic() || (r.body.isSleeping() && (tick + r.index) % 40 !== 0)) continue;
+    const p = r.body.translation(), o = r.body.rotation(), v = r.body.linvel(), w = r.body.angvel();
+    rk.push(r.index, r3(p.x), r3(p.y), r3(p.z), r3(o.x), r3(o.y), r3(o.z), r3(o.w), r3(v.x), r3(v.y), r3(v.z), r3(w.x), r3(w.y), r3(w.z));
+  }
+  for (const [i, d] of netEdits) { const mm = Math.round(d * 1000); if (mm) e.push(i, mm); }
+  netEdits.clear();
+  const eg = [];
+  for (const [i, d] of netG) { const mm = Math.round(d * 1000); if (mm) eg.push(i, mm); }
+  netG.clear();
+  const m = { t: "s", p: [r3(t.x), r3(t.y), r3(t.z)], q: [r3(q.x), r3(q.y), r3(q.z), r3(q.w)], a: r3(me.arm), b: r3(me.tilt), w: r3(me.steer), l: r3(me.load), v: r3(me.speed), k: KIND_ORDER.indexOf(me.kind), bd: r3(me.bed || 0) };
+  if (winch.on) m.h = [winch.kind, winch.ref, r3(winch.local.x), r3(winch.local.y), r3(winch.local.z), r3(winch.len), Math.round(winch.T)];
+  if (flags) m.fl = flags;
+  if (lookDirty || stepCount % 60 === 0) { m.lk = lookArr(myLook); lookDirty = false; }     // paint job: when it changes, and every second for newcomers
+  if (SITE === "farm") m.nb = activeBoulders;
+  if (gravel.length) m.gv = gravel;
+  for (const [id, [v, g]] of pendingLoad) if (v > 1e-4) send({ t: "to", to: id, m: { t: "ld", v: r3(v), g: r3(g) } });
+  pendingLoad.clear();
+  if (hopper && Math.abs(hopperD[0]) > 1e-4) { m.hd = [r3(hopperD[0]), r3(hopperD[1])]; hopperD[0] = hopperD[1] = 0; }
+  if (SITE === "flood" && net.hostId === net.id) { m.wl = r3(job.water); m.wh = r3(job.hold); }
+  if (rk.length) m.r = rk;
+  if (e.length) m.e = e;
+  if (eg.length) m.eg = eg;
+  send(m);
+  if (net.hostId === net.id && performance.now() - net.lastSave > 30000) { net.lastSave = performance.now(); send({ t: "save", site: SITE, d: JSON.stringify(buildSync()) }); }
+}
+
+// Other players' loaders are moved along the path they report, about a tenth of a second behind.
+const _qa = new THREE.Quaternion(), _qb = new THREE.Quaternion(), _pm = new THREE.Matrix4(), _pp = new THREE.Vector3(), ZERO = { x: 0, y: 0, z: 0 };
+function updatePeers() {
+  const now = performance.now() - 100;
+  for (const peer of net.peers.values()) {
+    const s = peer.snaps;
+    if (!s.length) continue;
+    let a = s[s.length - 1], b = a, k = 0;
+    for (let i = s.length - 1; i > 0; i--) if (s[i - 1].at <= now) { a = s[i - 1]; b = s[i]; k = clamp((now - a.at) / Math.max(1, b.at - a.at), 0, 1); break; }
+    const ld = peer.loader;
+    _qa.set(a.q[0], a.q[1], a.q[2], a.q[3]).slerp(_qb.set(b.q[0], b.q[1], b.q[2], b.q[3]), k);
+    const to = { x: lerp(a.p[0], b.p[0], k), y: lerp(a.p[1], b.p[1], k), z: lerp(a.p[2], b.p[2], k) }, rot = { x: _qa.x, y: _qa.y, z: _qa.z, w: _qa.w };
+    const at = ld.body.translation();
+    if (Math.hypot(to.x - at.x, to.y - at.y, to.z - at.z) > 3) {
+      // a jump (first report, or they reset): appear there, don't sweep through everything in between
+      ld.body.setTranslation(to, true); ld.body.setRotation(rot, true);
+    } else { ld.body.setNextKinematicTranslation(to); ld.body.setNextKinematicRotation(rot); }
+    ld.group.visible = true; peer.seen = true;
+    ld.arm = lerp(a.a, b.a, k); ld.tilt = lerp(a.b, b.b, k); ld.steer = lerp(a.w, b.w, k); ld.load = b.l; ld.speed = b.v; ld.bed = lerp(a.bd, b.bd, k);
+    poseBucket(ld);
+    if (ld.kind === "truck" && ld.bed > 0.5 && b.l > 0.05 && Math.random() < 0.6) truckPour(ld, 0, 0, ZERO);
+    if (ld.kind === "loader" && b.b < -0.12 && b.l > 0.02) {
+      _pm.compose(_pp.set(to.x, to.y, to.z), _qa, _one).multiply(ld.armPivot.matrix).multiply(ld.bucketPivot.matrix);
+      pourFrom(_pm, ZERO, 0);
+    }
+    ld.roll += (ld.speed * DT) / L.wheelR;
+  }
+}
+
+// ---------- moving between sites ----------
+function goSite(site, extra) {
+  if (net.online) {
+    if (extra !== "clear") send({ t: "save", site: SITE, d: JSON.stringify(buildSync()) });
+    send({ t: "site", site });            // the server tells everyone, including us, to move
+  } else location.replace(`?site=${site}&solo=1`);
+}
+function saveProgress() {
+  if (net.online) send({ t: "save", site: "progress", d: JSON.stringify(progress) });
+  try { localStorage.setItem("jobsite-progress", JSON.stringify(progress)); } catch {}
+}
+function finishLevel() {
+  if (job.ended) return;
+  job.ended = true;
+  const bonus = (flags & FL.stump ? 1 : 0) + (flags & FL.tractor ? 1 : 0);
+  showBanner(`<b>Job complete!</b>${TITLES[SITE]} finished in ${clock(job.time)} with ${bonus} of 2 bonus jobs.<br>Heading back to the quarry&hellip;`, 8000);
+  setTimeout(() => {
+    if (net.online && net.hostId !== net.id) return;        // the host moves everyone
+    const old = progress[SITE] || {};
+    progress[SITE] = { done: true, best: Math.min(old.best || 1e9, Math.round(job.time)), bonus: Math.max(old.bonus || 0, bonus) };
+    saveProgress();
+    if (net.online) send({ t: "save", site: SITE, d: "" });          // the next visit starts the level fresh
+    goSite("hub", "clear");
+  }, 7000);
+}
+
+// ---------- input ----------
+const keys = new Set();
+const CAM_PITCH = 0.62, CAM_DIST = 19;
+const cam = { yaw: 0, offset: 0, pitch: CAM_PITCH, dist: CAM_DIST, drag: false };
+let hintsOn = true;
+// ---------- paint shop (in the quarry garage) ----------
+let customOpen = false, customRow = 0, lookDirty = false;
+const elCustom = document.getElementById("custom");
+const LOOK_ROWS = [
+  { key: "p", label: "Paint", opts: [-1, ...PAINTS.keys()] },
+  { key: "s", label: "Stripes", opts: [0, 1, 2] },
+  { key: "sc", label: "Stripe colour", opts: [...PAINTS.keys()] },
+  { key: "f", label: "Flames", opts: [0, 1, 2, 3] },
+  { key: "fc", label: "Flame colours", opts: [...FLAME_SETS.keys()] },
+];
+const hex = (c) => "#" + c.toString(16).padStart(6, "0");
+function optHtml(row, v) {
+  if (row.key === "p") return v < 0 ? `<span class="sw crew" style="background:${hex(COLORS[me.slot])}" title="Crew colour">crew</span>` : `<span class="sw" style="background:${hex(PAINTS[v])}" title="${PAINT_NAMES[v]}"></span>`;
+  if (row.key === "sc") return `<span class="sw" style="background:${hex(PAINTS[v])}" title="${PAINT_NAMES[v]}"></span>`;
+  if (row.key === "fc") { const c = FLAME_SETS[v].c; return `<span class="sw" style="background:linear-gradient(90deg,${c[2]},${c[1]},${c[0]})" title="${FLAME_SETS[v].name}"></span>`; }
+  return `<span class="txt">${(row.key === "s" ? STRIPES : FLAMES)[v]}</span>`;
+}
+function renderCustom() {
+  elCustom.innerHTML = `<h2>Paint shop</h2>` + LOOK_ROWS.map((row, r) => `<div class="crow ${r === customRow ? "sel" : ""}"><span class="lab">${row.label}</span>${row.opts
+    .map((v) => `<button data-r="${r}" data-v="${v}" class="${myLook[row.key] === v ? "on" : ""}">${optHtml(row, v)}</button>`).join("")}</div>`).join("")
+    + `<div class="sub">${pad.on ? `<kbd>D-pad</kbd> choose &nbsp; <kbd>A</kbd> done` : `<kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd> or click to choose &nbsp; <kbd>G</kbd> done`}</div>`;
+}
+function setLook(key, v) {
+  myLook = { ...myLook, [key]: v };
+  applyLook(me, myLook);
+  try { localStorage.setItem("jobsite-look", JSON.stringify(lookArr(myLook))); } catch {}
+  lookDirty = true;
+  if (net.online) renderRoster();
+  renderCustom();
+}
+function stepLook(dir) {
+  const row = LOOK_ROWS[customRow], i = row.opts.indexOf(myLook[row.key]);
+  setLook(row.key, row.opts[(i + dir + row.opts.length) % row.opts.length]);
+}
+function openCustom() {
+  if ((switchPad() !== "garage" && !inPaintShop()) || Math.abs(me.speed) > 2) return;
+  customOpen = true; elCustom.style.display = "block"; renderCustom();
+}
+function closeCustom() { customOpen = false; elCustom.style.display = "none"; }
+elCustom.addEventListener("click", (e) => {
+  const b = e.target.closest("button");
+  if (!b) return;
+  customRow = +b.dataset.r; setLook(LOOK_ROWS[customRow].key, +b.dataset.v);
+});
+// ---------- controller ----------
+// Standard (Xbox-style) layout. Left stick steers, triggers drive, bumpers move the arms,
+// X / B curl and dump, A brakes, Y hooks the winch, D-pad up / down reels, right stick looks around.
+const pad = { on: false, prev: [], rx: 0, ry: 0 };
+const PAD_LABEL = { KeyW: "RT", KeyS: "LT", KeyA: "Left stick", KeyD: "", Space: "A", ArrowUp: "RB", ArrowDown: "LB", ArrowLeft: "X", ArrowRight: "B",
+  KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyG: "D-pad &larr;", KeyR: "View", KeyC: "R3", KeyH: "Menu" };
+function readPad() {
+  const list = navigator.getGamepads ? navigator.getGamepads() : [];
+  let gp = null;
+  for (const g of list) if (g && g.connected && g.buttons.length >= 16) { gp = g; break; }
+  if (!gp) { if (pad.on) { pad.on = false; refreshHelp(); } pad.rx = pad.ry = 0; return null; }
+  const dz = (v) => (Math.abs(v) < 0.16 ? 0 : (v - Math.sign(v) * 0.16) / 0.84), b = (i) => (gp.buttons[i] ? gp.buttons[i].value : 0);
+  const st = { lx: dz(gp.axes[0] || 0), rx: dz(gp.axes[2] || 0), ry: dz(gp.axes[3] || 0), b };
+  const used = Math.abs(st.lx) + Math.abs(st.rx) + Math.abs(st.ry) > 0 || gp.buttons.some((x) => x.pressed);
+  if (used && !pad.on) { pad.on = true; refreshHelp(); }
+  // buttons that act once per press
+  const hit = (i) => b(i) > 0.5 && !(pad.prev[i] > 0.5);
+  if (pad.on) {
+    if (elStart.style.display !== "none") { if (hit(0)) begin(); }
+    else if (customOpen) {
+      if (hit(12)) { customRow = (customRow + LOOK_ROWS.length - 1) % LOOK_ROWS.length; renderCustom(); }
+      if (hit(13)) { customRow = (customRow + 1) % LOOK_ROWS.length; renderCustom(); }
+      if (hit(14)) stepLook(-1);
+      if (hit(15)) stepLook(1);
+      if (hit(0) || hit(1)) closeCustom();
+    } else if (hit(14) && (switchPad() === "garage" || inPaintShop())) openCustom();
+    else {
+      if (hit(3)) toggleWinch();
+      if (hit(15)) switchVehicle();
+      if (hit(8)) resetLoader();
+      if (hit(11) || hit(14)) { cam.offset = 0; cam.pitch = CAM_PITCH; cam.dist = CAM_DIST; }
+      if (hit(9)) toggleHints();
+    }
+  }
+  pad.prev = gp.buttons.map((x) => x.value);
+  pad.rx = st.rx; pad.ry = st.ry;
+  return st;
+}
+function readKeys() {
+  const k = (c) => (keys.has(c) ? 1 : 0);
+  input.fwd = k("KeyW") - k("KeyS");
+  input.turn = k("KeyA") - k("KeyD");
+  input.brake = k("Space");
+  input.arm = k("ArrowUp") - k("ArrowDown");
+  input.tilt = k("ArrowLeft") - k("ArrowRight");
+  input.reel = k("KeyQ") - k("KeyX");
+  if (customOpen) { input.fwd = input.turn = input.arm = input.tilt = input.reel = 0; input.brake = 1; return; }    // parked in the paint shop
+  const g = padState;
+  if (g && pad.on) {
+    input.fwd = clamp(input.fwd + g.b(7) - g.b(6), -1, 1);
+    input.turn = clamp(input.turn - g.lx, -1, 1);
+    input.brake = input.brake || g.b(0) > 0.5 ? 1 : 0;
+    input.arm = clamp(input.arm + g.b(5) - g.b(4), -1, 1);
+    input.tilt = clamp(input.tilt + g.b(2) - g.b(1), -1, 1);
+    input.reel = clamp(input.reel + g.b(12) - g.b(13), -1, 1);
+  }
+}
+let padState = null;
+function toggleHints() { hintsOn = !hintsOn; elHint.style.display = hintsOn && elHint.innerHTML ? "block" : "none"; }
+addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT") return;
+  if (["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+  if (customOpen) {
+    if (e.code === "ArrowUp") { customRow = (customRow + LOOK_ROWS.length - 1) % LOOK_ROWS.length; renderCustom(); }
+    else if (e.code === "ArrowDown") { customRow = (customRow + 1) % LOOK_ROWS.length; renderCustom(); }
+    else if (e.code === "ArrowLeft") stepLook(-1);
+    else if (e.code === "ArrowRight") stepLook(1);
+    else if (["KeyG", "Enter", "Escape"].includes(e.code) && !e.repeat) closeCustom();
+    if (pad.on) { pad.on = false; refreshHelp(); renderCustom(); }
+    return;
+  }
+  if (e.repeat) return;
+  keys.add(e.code);
+  if (e.code === "KeyR") resetLoader();
+  if (e.code === "KeyC") { cam.offset = 0; cam.pitch = CAM_PITCH; cam.dist = CAM_DIST; }
+  if (e.code === "KeyE" && running) toggleWinch();
+  if (e.code === "KeyF" && running) switchVehicle();
+  if (e.code === "KeyG" && running) openCustom();
+  if (e.code === "KeyP") {
+    testUnlock = !testUnlock;
+    try { localStorage.setItem("jobsite-unlock", testUnlock ? "1" : "0"); } catch {}
+    refreshSigns();
+    showBanner(testUnlock ? "<b>Test mode: everything unlocked</b>All levels and vehicles. Press P again to lock them." : "<b>Test mode off</b>Levels and vehicles follow your real progress again.", 3500);
+  }
+  if (e.code === "KeyH") toggleHints();
+  if (pad.on) { pad.on = false; refreshHelp(); }          // back on the keyboard: show keyboard keys again
+});
+addEventListener("keyup", (e) => keys.delete(e.code));
+addEventListener("blur", () => keys.clear());
+renderer.domElement.addEventListener("pointerdown", (e) => { cam.drag = true; renderer.domElement.setPointerCapture(e.pointerId); });
+renderer.domElement.addEventListener("pointerup", () => { cam.drag = false; });
+renderer.domElement.addEventListener("pointermove", (e) => {
+  if (!cam.drag) return;
+  cam.offset -= e.movementX * 0.006;
+  cam.pitch = clamp(cam.pitch + e.movementY * 0.004, 0.08, 1.25);
+});
+renderer.domElement.addEventListener("wheel", (e) => { cam.dist = clamp(cam.dist * (e.deltaY > 0 ? 1.1 : 0.9), 7, 45); }, { passive: true });
+
+// ---------- HUD ----------
+const elFill = document.getElementById("fill"), elFillBar = document.getElementById("fillbar"), elFillText = document.getElementById("filltext");
+const elTasks = document.getElementById("tasks"), elGauges = document.getElementById("gauges"), elBanner = document.getElementById("banner");
+const elHint = document.getElementById("hint"), elPrompt = document.getElementById("prompt");
+const clock = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, "0")}`;
+let bannerTimer = 0;
+function showBanner(html, ms) { elBanner.innerHTML = html; elBanner.style.display = "block"; clearTimeout(bannerTimer); bannerTimer = setTimeout(() => { elBanner.style.display = "none"; }, ms); }
+elTasks.addEventListener("click", (e) => { if (e.target.id === "leave") goSite("hub"); });
+const row = (ok, text, cls = "") => `<div class="${cls} ${ok ? "done" : ""}">${ok ? "&#10003;" : "&#9675;"} ${text}</div>`;
+const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", G: "KeyG", R: "KeyR", H: "KeyH", C: "KeyC", Space: "Space",
+  "&uarr;": "ArrowUp", "&darr;": "ArrowDown", "&larr;": "ArrowLeft", "&rarr;": "ArrowRight" };
+const K = (k) => { const t = pad.on && KEY_CODE[k] ? PAD_LABEL[KEY_CODE[k]] : k; return t ? `<kbd>${t}</kbd>` : ""; };
+const elHelp = document.getElementById("help"), HELP_KEYS = elHelp.innerHTML;
+function refreshHelp() {
+  elHelp.innerHTML = !pad.on ? HELP_KEYS : `<b>Controller</b><br>
+    <kbd>Left stick</kbd> steer &nbsp; <kbd>RT</kbd> drive &nbsp; <kbd>LT</kbd> reverse &nbsp; <kbd>A</kbd> brake<br>
+    <kbd>RB</kbd><kbd>LB</kbd> raise / lower arms &nbsp; <kbd>X</kbd><kbd>B</kbd> curl / dump<br>
+    <kbd>Y</kbd> winch hook / unhook &nbsp; <kbd>D-pad &uarr;</kbd><kbd>&darr;</kbd> reel in / out<br>
+    <kbd>D-pad &rarr;</kbd> switch vehicle &nbsp; <kbd>D-pad &larr;</kbd> paint shop (garage or pink shop)<br>
+    <kbd>View</kbd> reset &nbsp; <kbd>Menu</kbd> hints &nbsp; 
+<kbd>Right stick</kbd> look &nbsp; <kbd>R3</kbd> recenter`;
+  if (customOpen) renderCustom();
+  elHint.dataset.h = ""; elPrompt.dataset.h = "\u0000";       // redraw hint and prompt with the right labels
+}
+function setHint(html) {
+  if (elHint.dataset.h === html) return;
+  elHint.dataset.h = html; elHint.innerHTML = html ? `<span>&#128161;</span> ${html}` : "";
+  elHint.style.display = hintsOn && html ? "block" : "none";
+}
+// P unlocks every level and vehicle for play-testing (kept in this browser only; your real progress is untouched)
+let testUnlock = false;
+try { testUnlock = localStorage.getItem("jobsite-unlock") === "1"; } catch {}
+const isLocked = (hs) => !testUnlock && (!!hs.locked || (!!hs.needs && !(progress[hs.needs] && progress[hs.needs].done)));
+function refreshSigns() {
+  for (const hs of houses) {
+    const p = progress[hs.id];
+    if (hs.garage) hs.b.sign.userData.draw(hs.title, "Switch vehicles here", "#c9a6ff");
+    else if (hs.paint) hs.b.sign.userData.draw(hs.title, "Drive in to customize", "#ff9cc4");
+    else if (isLocked(hs)) hs.b.sign.userData.draw(hs.title, hs.needs ? `Finish level ${LEVEL_NUM[hs.needs]} first` : "Locked", "#aab3be");
+    else hs.b.sign.userData.draw(hs.title, p && p.done ? `★ Done in ${clock(p.best)}` : "Drive in to start", p && p.done ? "#8be28b" : "#ffc928");
+  }
+}
+refreshSigns();
+
+// ---------- per-site rules ----------
+const enter = { house: null, t: 0 };
+function hubStep() {
+  const t = chassis.translation();
+  const hs = houses.find((h) => h.b.inside(t.x, t.z)) || null;
+  if (hs !== enter.house) { enter.house = hs; enter.t = 0; if (!hs) elBanner.style.display = "none"; }
+  if (!hs) return;
+  if (hs.garage) return;
+  if (hs.paint) {                                                    // stop inside and the paint shop opens by itself
+    if (Math.abs(me.speed) > 0.8) { enter.t = 0; return; }
+    if (enter.t === 0 && !customOpen) openCustom();
+    enter.t = 1; return;
+  }
+  if (isLocked(hs)) { if (enter.t === 0) showBanner(`<b>${hs.title}</b>Finish the earlier jobs to unlock this one.`, 2500); enter.t = 1; return; }
+  if (Math.abs(me.speed) > 0.8) { if (enter.t > 0) showBanner(`<b>${hs.title}</b>Stop inside to start.`, 1500); enter.t = 0; return; }
+  const before = Math.ceil(2 - enter.t);
+  enter.t += DT;
+  const left = Math.ceil(2 - enter.t);
+  if (left !== before || enter.t <= DT * 1.5) showBanner(`<b>${hs.title}</b>${left > 0 ? `Starting in ${left}&hellip; (drive out to cancel)` : "Let's go!"}`, 3000);
+  if (enter.t >= 2 && enter.t - DT < 2) goSite(hs.id);
+}
+function farmStep() {
+  // the stump comes out under enough pull: two winches, or one once it's been dug around
+  if (!(flags & FL.stump)) {
+    const sp = stump.body.translation();
+    let drop = 0;
+    for (let a = 0; a < 12; a++) {
+      const x = sp.x + Math.cos(a) * 2.2, z = sp.z + Math.sin(a) * 2.2, fx = Math.round((x + HALF) / CELL), fz = Math.round((z + HALF) / CELL), i = fz + fx * W;
+      drop += base[i] - heights[i];
+    }
+    const need = drop / 12 > 0.5 ? 28000 : 85000;
+    job.stumpPull = pullOn(stump) > need ? job.stumpPull + DT : 0;
+    if (job.stumpPull > 0.8) setFlag(FL.stump);
+  }
+  if (barnDoor.userData.open) barnDoor.position.x = lerp(barnDoor.position.x, FARM.barn.door + 0.2, 0.03);
+  const t = chassis.translation();
+  if (!job.moved && Math.hypot(t.x - FARM.spawn.x, t.z - FARM.spawn.z) > 8) job.moved = true;
+  const mud = mudAt(t.x, t.z);
+  job.stuck = mud > 0.3 && input.fwd !== 0 && Math.abs(me.speed) < 0.8 && !winch.on ? job.stuck + DT : Math.max(0, job.stuck - DT * 0.3);
+  if (!job.ended) job.time += DT;
+}
+function checkFarm() {
+  const F = FARM, hd = (p, x, z) => { const t = p.body.translation(); return Math.hypot(t.x - x, t.z - z); };
+  job.logsIn = logs.filter((l) => hd(l, F.pile.x, F.pile.z) < F.pile.r).length;
+  if (job.logsIn === logs.length) setFlag(FL.logs);
+  const act = boulders.filter((b) => b.active);
+  job.bouldersIn = act.filter((b) => hd(b, F.sink.x, F.sink.z) < F.sink.r + 0.5).length;
+  if (job.bouldersIn >= act.length) setFlag(FL.boulders);
+  let bvol = 0;
+  for (const b of act) { const p = b.body.translation(); if (Math.hypot(p.x - F.sink.x, p.z - F.sink.z) < F.sink.r && p.y < 0.4) bvol += b.body.mass() / 260; }
+  job.fill = clamp(1 - Math.max(0, sinkDeficit() - bvol) / SINK_START, 0, 1);
+  if (job.fill >= 0.92) setFlag(FL.fill);
+  if ((flags & (FL.logs | FL.boulders | FL.fill)) === (FL.logs | FL.boulders | FL.fill)) setFlag(FL.open);
+  const t = chassis.translation();
+  if (flags & FL.open && barn.inside(t.x, t.z)) setFlag(FL.done);
+  const tp = tractor.body.translation();
+  if (mudAt(tp.x, tp.z) < 0.12) setFlag(FL.tractor);
+  sinkMarker.beam.visible = !(flags & FL.fill) || !(flags & FL.boulders);
+  pileMarker.beam.visible = !(flags & FL.logs);
+  const fillPct = flags & FL.fill ? 100 : Math.floor((job.fill / 0.92) * 100);
+  elTasks.innerHTML = `<h2>Muddle Acres</h2>
+    ${row(flags & FL.logs, `Drag the fallen trees to the log pile: ${Math.min(job.logsIn, logs.length)} / ${logs.length}`)}
+    ${row(flags & FL.boulders, `Push the boulders into the sinkhole: ${Math.min(job.bouldersIn, act.length)} / ${act.length}`)}
+    ${row(flags & FL.fill, `Fill the sinkhole: ${Math.min(100, fillPct)}%`)}
+    ${row(flags & FL.done, flags & FL.open ? "Winch up the hill and drive into the barn" : "Then: winch up the hill to the barn", flags & FL.open ? "" : "sub")}
+    <div class="sub" style="margin-top:6px">Bonus</div>
+    ${row(flags & FL.stump, "Pull out the old stump (two winches, or dig round it)", "sub")}
+    ${row(flags & FL.tractor, "Winch the stuck tractor out of the creek", "sub")}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  setHint(farmHint());
+}
+function farmHint() {
+  const t = chassis.translation();
+  if (!job.moved) return `Welcome to Muddle Acres! Drive with ${K("W")}${K("A")}${K("S")}${K("D")}. Drag the mouse to look around.`;
+  if (job.stuck > 1.5) return `Stuck in the mud? Turn your back to a tree (or a friend), press ${K("E")} to hook your winch, then hold ${K("Q")} to pull yourself out.`;
+  if (!(flags & FL.logs)) {
+    if (winch.on && winch.kind === 1 && props[winch.ref].type === "log") return `Hooked! Drive away to drag it, or brake and hold ${K("Q")} to reel it in. Leave it inside the <b class="g">log pile</b> (green ring), then press ${K("E")} to unhook.`;
+    if (target && target.kind === 1 && props[target.ref].type === "log") return `Press ${K("E")} to hook your rear winch to the fallen tree.`;
+    return "Fallen trees block the gate to the dirt bank (west of the yard). Your winch is on the <b>back</b> of the loader: turn your back to a tree, within 35 m.";
+  }
+  if (!(flags & FL.boulders)) return `Gate clear! Push the boulders into the <b class="b">sinkhole</b> (blue ring). Lower the bucket with ${K("&darr;")} and drive into them.`;
+  if (!(flags & FL.fill)) return `Fill the rest of the sinkhole with dirt from the dirt bank: lower the bucket ${K("&darr;")} and drive into the bank, raise it ${K("&uarr;")}, then tip it ${K("&rarr;")} over the hole.`;
+  if (!(flags & FL.done)) {
+    const onTop = t.y > heightAt(FARM.hill.x, FARM.hill.z) - 1.5 && Math.hypot(t.x - FARM.hill.x, t.z - FARM.hill.z) < FARM.hill.top + 2;
+    if (onTop) return `Made it! Unhook with ${K("E")} and drive into the barn to finish the job.`;
+    if (winch.on && winch.kind === 2 && anchors[winch.ref].name === "winch post") return `Hold ${K("Q")} to winch yourself up. Keep the bucket raised so it doesn't dig into the slope.`;
+    return `The barn on the hill is open! It's too steep to drive up. Back up to the slope, hook the <b>winch post</b> at the top with ${K("E")}, and hold ${K("Q")} to pull yourself up.`;
+  }
+  return "";
+}
+// ----- Rapid River rules -----
+const safe = { x: RIVER.spawn.x, z: RIVER.spawn.z, yaw: 0, wet: 0 };
+const smash = { i: -1, t: 0 };
+const mineP = (p) => !net.online || p.owner === net.id || p.owner === 0;
+function riverStep() {
+  const R = RIVER, t = chassis.translation(), ground = heightAt(t.x, t.z), inBand = Math.abs(t.z - R.mid) < 11;
+  // water deeper than the axles sweeps a loader back to the bank it left
+  if (inBand && ground < R.water - 0.3 && t.y < ground + 2.4) {
+    chassis.applyImpulse({ x: 9000 * DT, y: 0, z: 0 }, true);
+    if ((safe.wet += DT) > 1.1) { hookOff(); placeLoader(safe.x, safe.z, safe.yaw); safe.wet = 0; showBanner("<b>Swept away!</b>The water is too deep. Fill the shallows with dirt to make a causeway.", 5000); }
+  } else {
+    safe.wet = Math.max(0, safe.wet - DT);
+    if (stepCount % 30 === 0 && ground > 0 && !inBand && mudAt(t.x, t.z) < 0.5) { safe.x = t.x; safe.z = t.z; safe.yaw = heading(); }
+  }
+  // smashing: hold the bucket down on a rock to crush it into gravel
+  let hit = -1;
+  if (input.arm < 0 && me.tilt > -0.3) {
+    for (const k of riverRocks) {
+      if (!k.active || !mineP(k)) continue;
+      const p = k.body.translation();
+      _rp.set(p.x, p.y, p.z).applyMatrix4(_bi);
+      if (Math.abs(_rp.x) < 1.5 && _rp.z > -0.4 && _rp.z < 1.7 && _rp.y < 0.1 && _rp.y > -(k.r * 1.6 + 0.5)) { hit = k.index; break; }
+    }
+  }
+  if (hit >= 0 && hit === smash.i) {
+    if ((smash.t += DT) > 0.4) { const k = props[hit], p = k.body.translation(); layGravel(hit, p.x, p.z, k.r); smash.t = 0; smash.i = -1; }
+  } else { smash.i = hit; smash.t = 0; }
+  if (stepCount % 20 === 0) {
+    for (const p of props) {                       // a crate that falls in deep water washes back to where it started
+      if (!p.active || p.type !== "crate" || !mineP(p)) continue;
+      const q = p.body.translation();
+      p.wet = Math.abs(q.z - R.mid) < 11 && q.y < R.water - 0.6 ? (p.wet || 0) + 1 : 0;
+      if (p.wet > 6) {
+        p.wet = 0; if (winch.on && winch.kind === 1 && winch.ref === p.index) hookOff();
+        p.body.setTranslation({ x: p.x, y: heightAt(p.x, p.z) + 1.2, z: p.z }, true); p.body.setLinvel({ x: 0, y: 0, z: 0 }, true); p.body.setAngvel({ x: 0, y: 0, z: 0 }, true);
+        showBanner(`<b>The ${p.name} washed away</b>It has been put back where it started.`, 4000);
+      }
+    }
+  }
+  if (!job.moved && Math.hypot(t.x - R.spawn.x, t.z - R.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+// how much of a belt (z0..z1) can be crossed: for each row, is there a strip 3.5 m wide that passes ok()?
+function crossable(z0, z1, xr, ok, need = 7) {
+  let rows = 0, good = 0;
+  for (let z = z0; z <= z1; z += 1) {
+    rows++;
+    let run = 0, pass = false;
+    for (let x = -xr; x <= xr && !pass; x += 0.5) { run = ok(x, z) ? run + 1 : 0; if (run >= need) pass = true; }
+    if (pass) good++;
+  }
+  return good / rows;
+}
+function checkRiver() {
+  const R = RIVER, at = (p, o) => { const t = p.body.translation(); return Math.hypot(t.x - o.x, t.z - o.z) < o.r; };
+  job.fill = crossable(R.mid - 6, R.mid + 6, 22, (x, z) => heightAt(x, z) > R.water + 0.1);
+  if (job.fill >= 1) setFlag(FL.logs);
+  job.road = crossable(R.swamp.z0, R.swamp.z1, 60, (x, z) => mudAt(x, z) < 0.35);
+  if (job.road >= 1) setFlag(FL.boulders);
+  if (at(crate, R.depot)) setFlag(FL.done);
+  if (at(toolbox, R.depot)) setFlag(FL.stump);
+  const crushed = riverRocks.filter((k) => !k.active).length;
+  if (crushed >= riverRocks.length) setFlag(FL.tractor);
+  const built = !!(flags & FL.logs), paved = !!(flags & FL.boulders);
+  fordMarker.beam.visible = !built; depotMarker.beam.visible = built && paved;
+  const t = chassis.translation(), far = t.z > R.mid + 7, cp = crate.body.translation();
+  elTasks.innerHTML = `<h2>Rapid River</h2>
+    ${row(built, `Build a causeway across the river: ${built ? 100 : Math.floor(job.fill * 100)}%`)}
+    ${row(paved, `Lay gravel across the swamp: ${paved ? 100 : Math.floor(job.road * 100)}% <span class="sub">(rocks crushed ${crushed} / ${riverRocks.length})</span>`, built ? "" : "sub")}
+    ${row(flags & FL.done, "Bring the generator back to the depot", paved ? "" : "sub")}
+    <div class="sub" style="margin-top:6px">Bonus</div>
+    ${row(flags & FL.stump, "Bring the toolbox back to the depot too", "sub")}
+    ${row(flags & FL.tractor, "Crush every rock", "sub")}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  let h = "";
+  const nearRock = riverRocks.some((k) => { if (!k.active) return false; const p = k.body.translation(); return Math.hypot(p.x - t.x, p.z - t.z) < 8; });
+  if (!job.moved) h = "There is no bridge here. The depot needs its generator back from the far side of the river. Drive north.";
+  else if (!built) h = me.load > 0.5
+    ? `Tip the dirt ${K("&rarr;")} into the shallow water by the <b class="o">orange ring</b>. Keep going until a strip of dry ground reaches the far bank.`
+    : `Build a causeway: fill your bucket at the <b>dirt bank</b> west of the road (lower the bucket ${K("&darr;")} and drive in), then dump it into the shallows at the <b class="o">orange ring</b>. Deep water sweeps you away.`;
+  else if (!paved) {
+    if (!far) h = "The causeway holds! Drive across.";
+    else if (me.kind === "roller") h = `Roll over the rocks to crush them into heaps of gravel. Then switch back to the loader (${K("F")} at the vehicle yard) to scoop the gravel and spread it over the swamp.`;
+    else if (nearRock) h = me.loadG > 0.5
+      ? `Tip the gravel ${K("&rarr;")} onto the dark swamp mud. A layer of gravel makes it firm enough to drive on: build a strip right across.`
+      : `Crush a rock: raise the bucket ${K("&uarr;")}, hang it over the rock and hold ${K("&darr;")}. It leaves a heap of grey gravel: scoop it like dirt and spread it over the swamp. (The road roller crushes rocks by driving over them.)`;
+    else h = me.loadG > 0.5 ? `Tip the gravel ${K("&rarr;")} onto the dark swamp mud to make a firm strip across it.`
+      : "The swamp ahead is too boggy to cross. Crush the grey rocks on this bank into gravel, then scoop the gravel and spread it over the mud.";
+  } else if (!(flags & FL.done)) {
+    if (winch.on && winch.kind === 1 && winch.ref === crate.index) h = `Tow it home: over your gravel, across the causeway, to the <b class="g">depot</b> (green ring). If it falls in deep water it washes back.`;
+    else if (cp.z > R.mid) h = `Follow the road north to the red generator. Turn your back to it, hook it with ${K("E")} and tow it home.`;
+    else h = `Nearly there: get the generator into the <b class="g">depot</b> (green ring) near where you started.`;
+  }
+  setHint(h);
+}
+// ----- Ridge Road rules -----
+function ridgeStep() {
+  const R = RIDGE, t = chassis.translation();
+  // holding the bucket down on a rock crushes it into gravel here too
+  let hit = -1;
+  if (me.kind === "loader" && input.arm < 0 && me.tilt > -0.3) {
+    for (const k of ridgeRocks) {
+      if (!k.active || !mineP(k)) continue;
+      const p = k.body.translation();
+      _rp.set(p.x, p.y, p.z).applyMatrix4(_bi);
+      if (Math.abs(_rp.x) < 1.5 && _rp.z > -0.4 && _rp.z < 1.7 && _rp.y < 0.1 && _rp.y > -(k.r * 1.6 + 0.5)) { hit = k.index; break; }
+    }
+  }
+  if (hit >= 0 && hit === smash.i) {
+    if ((smash.t += DT) > 0.4) { const k = props[hit], p = k.body.translation(); layGravel(hit, p.x, p.z, k.r); smash.t = 0; smash.i = -1; }
+  } else { smash.i = hit; smash.t = 0; }
+  if (!job.moved && Math.hypot(t.x - R.spawn.x, t.z - R.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function checkRidge() {
+  const R = RIDGE, at = (p, o) => { const t = p.body.translation(); return Math.hypot(t.x - o.x, t.z - o.z) < o.r && t.y > R.top - 1; };
+  job.fill = crossable(R.slide.z - R.slide.len + 1, R.slide.z + R.slide.len - 1, 6, (x, z) => heightAt(x, z) < ridgeRoad(z) + 0.45, 10);       // 5 m wide: room for the cabin
+  if (job.fill >= 1) setFlag(FL.logs);
+  job.road = crossable(R.gully.z0, R.gully.z1, 6, (x, z) => Math.abs(heightAt(x, z) - ridgeRoad(z)) < 0.55, 10);
+  if (job.road >= 1) setFlag(FL.boulders);
+  const cp = cabin.body.translation(), atStage = cp.z > R.stage.z0 - 3 && cp.y > 11;
+  if (atStage) setFlag(FL.fill);
+  if (at(cabin, R.pad)) setFlag(FL.done);
+  if (at(firewood, R.pad)) setFlag(FL.stump);
+  const crushed = ridgeRocks.filter((k) => !k.active).length;
+  if (crushed >= ridgeRocks.length) setFlag(FL.tractor);
+  const cleared = !!(flags & FL.logs), filled = !!(flags & FL.boulders), staged = !!(flags & FL.fill);
+  padMarker.beam.visible = staged;
+  elTasks.innerHTML = `<h2>Ridge Road</h2>
+    ${row(cleared, `Clear a way through the landslide: ${cleared ? 100 : Math.floor(job.fill * 100)}%`)}
+    ${row(filled, `Fill the washed-out gully: ${filled ? 100 : Math.floor(job.road * 100)}%`)}
+    ${row(staged, "Tow the cabin up to the foot of the last climb", cleared && filled ? "" : "sub")}
+    ${row(flags & FL.done, "Winch the cabin up to the summit pad", staged ? "" : "sub")}
+    <div class="sub" style="margin-top:6px">Bonus</div>
+    ${row(flags & FL.stump, "Bring the firewood crate to the summit too", "sub")}
+    ${row(flags & FL.tractor, `Crush the landslide rocks: ${crushed} / ${ridgeRocks.length}`, "sub")}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  const t = chassis.translation(), onTop = t.y > R.top - 1.2 && t.z > R.pitch.z1 - 1, towing = winch.on && winch.kind === 1 && winch.ref === cabin.index;
+  let h = "";
+  if (!job.moved) h = "The cabin has to go to the top of the ridge. The only road up is blocked: drive north and take a look.";
+  else if (!cleared) h = me.load > 3
+    ? `Carry the dirt up the road and tip it ${K("&rarr;")} into the washed-out gully further on. The landslide is exactly the fill you need.`
+    : `A landslide blocks the road. Dig a way through: lower the bucket ${K("&darr;")} and drive into it. Push the rocks aside, or crush them.`;
+  else if (!filled) h = me.load > 0.5
+    ? `Tip the load ${K("&rarr;")} into the gully. Keep filling until a strip of road reaches the far side.`
+    : `The road is washed out ahead. Fill the gully with what is left of the landslide, about 5 m wide so the cabin fits. Bumpy fill? The <b>road roller</b> (${K("F")} at the purple yard) flattens it.`;
+  else if (!staged) h = towing
+    ? "Tow the cabin up the road, over your fill, to the flat spot at the foot of the last steep climb."
+    : `Road open! Go back for the cabin near the start: turn your back to it, hook it with ${K("E")} and tow it up the road.`;
+  else if (!(flags & FL.done)) {
+    if (cp.y > R.top - 1) h = `Tow the cabin onto the <b class="g">summit pad</b> (green ring) to finish.`;
+    else if (!onTop && towing) h = `The last climb is too steep to drive, let alone tow. Unhook the cabin with ${K("E")} and leave it here for now.`;
+    else if (!onTop && winch.on) h = `Hold ${K("Q")} to winch yourself up the climb.`;
+    else if (!onTop) h = `Back up to the steep climb, hook the <b>winch post</b> at the top with ${K("E")} and hold ${K("Q")} to pull yourself up. The cabin comes after you.`;
+    else if (towing) h = `Hold ${K("Space")} to dig your tyres in and reel the cabin up with ${K("Q")}. Then tow it to the green ring.`;
+    else h = `Now pull the cabin up from above: unhook from the post, turn your back to the drop, hook the cabin with ${K("E")}, hold ${K("Space")} and reel it in with ${K("Q")}.`;
+  }
+  setHint(h);
+}
+// ----- shared: hold the bucket down on a rock to crush it -----
+function smashRocks() {
+  let hit = -1;
+  if (me.kind === "loader" && input.arm < 0 && me.tilt > -0.3) {
+    for (const k of props) {
+      if (!k.active || k.type !== "rock" || !mineP(k)) continue;
+      const p = k.body.translation();
+      _rp.set(p.x, p.y, p.z).applyMatrix4(_bi);
+      if (Math.abs(_rp.x) < 1.5 && _rp.z > -0.4 && _rp.z < 1.7 && _rp.y < 0.1 && _rp.y > -(k.r * 1.6 + 0.5)) { hit = k.index; break; }
+    }
+  }
+  if (hit >= 0 && hit === smash.i) {
+    if ((smash.t += DT) > 0.4) { const k = props[hit], p = k.body.translation(); layGravel(hit, p.x, p.z, k.r); smash.t = 0; smash.i = -1; }
+  } else { smash.i = hit; smash.t = 0; }
+}
+const coverOf = (cells, min) => { let n = 0; for (const i of cells) if (gravH[i] >= min) n++; return cells.length ? n / cells.length : 0; };
+
+// ----- Gravel Run rules -----
+const _bc = new THREE.Vector3();
+function haulStep() {
+  const H = HAUL, t = chassis.translation();
+  smashRocks();
+  // a truck parked under the chute with its bed down fills from the hopper
+  if (me.kind === "truck" && me.bed < 0.2 && hopper.vol > 0.01 && me.load < KINDS.truck.cap - 0.01) {
+    truckPose(me, _tw); _bc.set(0, 0.5, -0.9).applyMatrix4(_tw);
+    if (Math.hypot(_bc.x - H.bay.x, _bc.z - H.bay.z) < H.bay.r) {
+      const take = Math.min(4.5 * DT, hopper.vol, KINDS.truck.cap - me.load), gf = hopper.vol > 0 ? clamp(hopper.g / hopper.vol, 0, 1) : 0;
+      hopper.vol -= take; hopper.g = Math.max(0, hopper.g - take * gf); hopperD[0] -= take; hopperD[1] -= take * gf;
+      me.load += take; me.loadG += take * gf;
+      if (Math.random() < 0.5) spawnDirt(H.bay.x + (Math.random() - 0.5) * 1.2, heightAt(H.bay.x, H.bay.z) + 4.5, H.bay.z + (Math.random() - 0.5) * 0.8, 0, -1, 0, 0, 1);
+    }
+  }
+  if (!job.moved && Math.hypot(t.x - H.spawn.x, t.z - H.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function checkHaul() {
+  const H = HAUL, P = H.pad, t = chassis.translation();
+  const lp = blockLog.body.translation(), logInWay = Math.abs(lp.x + 34) < 5.5 && lp.z > 34 && lp.z < 50;
+  const rocksLeft = blockRocks.filter((k) => k.active).length;
+  if (!logInWay && rocksLeft === 0) setFlag(2);
+  job.road = crossable(H.stream.z - H.stream.w + 0.5, H.stream.z + H.stream.w - 0.5, 85, (x, z) => mudAt(x, z) < 0.35, 10);
+  if (job.road >= 1) setFlag(4);
+  job.cover = coverOf(padCells, 0.03);
+  if (job.cover >= 0.85 && (flags & 2) && (flags & 4)) setFlag(32);
+  if (coverOf(pinCells, 0.06) >= 0.8) setFlag(64);
+  const pc = picnic.body.translation();
+  if (Math.abs(pc.x - P.x) < P.w / 2 && Math.abs(pc.z - P.z) < P.d / 2) setFlag(1);
+  hopper.heap.visible = hopper.vol > 0.3; hopper.heap.scale.set(1, clamp(hopper.vol / hopper.cap, 0.05, 1) * 0.6, 1);
+  fordMarker4.beam.visible = !(flags & 4); bayMarker.beam.visible = !!(flags & 2) && hopper.vol > 1;
+  const ford = !!(flags & 4), road = !!(flags & 2), pct = Math.min(100, Math.floor((job.cover / 0.85) * 100));
+  elTasks.innerHTML = `<h2>Gravel Run</h2>
+    ${row(ford, `Gravel the stream ford: ${ford ? 100 : Math.floor(job.road * 100)}%`)}
+    ${row(road, `Clear the pit road: tree ${logInWay ? "in the way" : "moved"}, boulders left ${rocksLeft}`)}
+    ${row(flags & 32, `Gravel the campsite pad: ${pct}%`, ford && road ? "" : "sub")}
+    <div class="sub">Hopper: ${hopper.vol.toFixed(0)} / ${hopper.cap} m\u00b3</div>
+    <div class="sub" style="margin-top:6px">Bonus</div>
+    ${row(flags & 1, "Bring the picnic tables from the pit to the pad", "sub")}
+    ${row(flags & 64, "Gravel the hairpin bend too", "sub")}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  let h = "";
+  const truck = me.kind === "truck", gravelIn = me.loadG > me.load * 0.5 && me.load > 0.5;
+  if (!job.moved) h = `The campsite needs a gravel pad (yellow outline). The gravel is in a pit at the top of the switchback road, across a boggy stream. Start by making the ford passable.`;
+  else if (!ford) h = gravelIn
+    ? `Tip the gravel ${K("&rarr;")} onto the bog at the <b class="o">ford</b> (orange ring). Pour while you creep forward to lay a strip 5 m wide right across.`
+    : `The stream is bog. Crush the grey rocks near it into gravel: raise the bucket ${K("&uarr;")}, hang it over a rock and hold ${K("&darr;")}. Then scoop the gravel and spread it on the ford.`;
+  else if (!road) h = `Drive up the switchbacks to the pit. A fallen tree and two boulders block the pit road: winch the tree off the road (${K("E")}) and crush the boulders.`;
+  else if (truck && me.load > 1) h = `Drive down to the campsite pad. Raise the bed ${K("&rarr;")} just until gravel starts to pour, then keep driving: a slow pour on the move lays a thin, even layer. Take the hairpin slowly: the hillside is too steep to climb back.`;
+  else if (truck) h = `Fill up: park with the bed under the <b class="o">hopper chute</b> (orange ring by the pit), bed down. Or have a friend tip their loader into your bed.`;
+  else if (t.z > 30) h = `Scoop gravel from the pit and tip it into the hopper bin (sign). Then switch to the truck at the pit's <b class="p">vehicle yard</b> with ${K("F")} and park under the chute.`;
+  else if (job.cover > 0.3) h = `Spread the piles thin: push with a level bucket, or pour while driving. The road roller flattens bumps and keeps gravel as gravel. ${pct}% covered.`;
+  else h = "Head up to the pit for gravel. A dump truck carries three buckets at once; the hopper lets you load it on your own.";
+  setHint(h);
+}
+
+// ----- Flood Season rules -----
+function leveeCrest() {
+  const F = FLOOD, closed = !!(flags & 4);
+  let min = 1e9, at = 0;
+  const per = F.breaches.map(() => 1e9);
+  for (let x = -86; x <= 86; x += 0.5) {
+    let c = -9;
+    for (let z = F.levee.z - 4; z <= F.levee.z + 4; z += 0.5) c = Math.max(c, heightAt(x, z));
+    const dg = Math.abs(x - F.gate.x);
+    if (dg < F.gate.w / 2 + 0.95) c = dg > F.gate.w / 2 ? 3.0 : closed ? 2.8 : c;          // concrete walls, and the gate once it is in
+    F.breaches.forEach((b, n) => { if (Math.abs(x - b.x) <= b.w / 2 + 1) per[n] = Math.min(per[n], c); });
+    if (c < min) { min = c; at = x; }
+  }
+  return { min, at, per };
+}
+function floodShow() {
+  job.floodVis = 6;
+  showBanner("<b>The river broke through!</b>The village is flooding. The surge will pass, but the water is coming back: plug the gap.", 6000);
+}
+function floodStep() {
+  const F = FLOOD, W2 = F.water, t = chassis.translation();
+  const host = !net.online || net.hostId === net.id, n = net.online ? Math.max(1, net.roster.length) : 1;
+  if (stepCount % 30 === 0) job.crest = leveeCrest();
+  if (host && job.time > W2.grace) {
+    const rate = (W2.peak - W2.start) / (W2.riseSolo / (1 + 0.3 * (n - 1)));
+    if (job.water < W2.peak) job.water = Math.min(W2.peak, job.water + rate * DT); else job.hold += DT;
+    if (job.crest && job.water > job.crest.min + 0.02) {          // the river finds the lowest gap
+      setFlag(2);
+      job.water = Math.max(W2.start, job.crest.min - 0.6); job.hold = 0;
+      floodShow();
+    }
+    if (job.hold > W2.hold && (flags & 4) && (flags & 8)) { if (!(flags & 2)) setFlag(64); setFlag(32); }
+  }
+  riverWater.position.y = job.water;
+  if (job.floodVis > 0) { job.floodVis -= DT; floodWater.visible = true; floodWater.position.y = lerp(0.1, 0.9, Math.min(1, job.floodVis / 3)); } else floodWater.visible = false;
+  // the floodgate locks once it is pushed into its slot
+  if (gate.active && mineP(gate)) {
+    const gp = gate.body.translation(), r = gate.body.rotation(), ax = Math.abs(1 - 2 * (r.y * r.y + r.z * r.z));
+    if (Math.abs(gp.x - F.gate.x) < 1.0 && Math.abs(gp.z - F.levee.z) < 2.6 && ax > 0.8) setFlag(4);
+  }
+  // cars: out past the levee is rescued; caught by the water before that, they're stuck
+  for (const c of cars) {
+    if (c.rescued || c.lost) continue;
+    const p = c.body.translation();
+    if (p.z < F.safeZ) c.rescued = true;
+    else if (job.water > heightAt(p.x, p.z) + 0.6) { c.lost = true; c.body.setBodyType(RAPIER.RigidBodyType.Fixed, true); showBanner("<b>A car was caught by the water</b>The car bonus is lost.", 4000); }
+  }
+  if (cars.every((c) => c.rescued)) setFlag(1);
+  // deep water sweeps a vehicle back to dry ground
+  const depth = t.z > F.levee.z - 1 ? job.water - heightAt(t.x, t.z) : -1;       // behind the levee it's dry
+  if (depth > 1.3) {
+    if ((safe.wet += DT) > 1.2) { hookOff(); placeLoader(safe.x, safe.z, safe.yaw); safe.wet = 0; showBanner("<b>Too deep!</b>Back on dry ground.", 3000); }
+  } else {
+    safe.wet = Math.max(0, safe.wet - DT);
+    if (stepCount % 30 === 0 && depth < 0 && t.z < F.levee.z - 6) { safe.x = t.x; safe.z = t.z; safe.yaw = heading(); }
+  }
+  if (!job.moved && Math.hypot(t.x - F.spawn.x, t.z - F.spawn.z) > 8) job.moved = true;
+  if (!job.ended) job.time += DT;
+}
+function checkFlood() {
+  const F = FLOOD, W2 = F.water, cr = job.crest || leveeCrest(), need = W2.peak + 0.1;
+  const plugged = cr.per.map((c) => c >= need), nPlug = plugged.filter(Boolean).length;
+  if (nPlug === F.breaches.length) setFlag(8);
+  breachBeams.forEach((b, n) => { b.visible = n < F.breaches.length ? !plugged[n] : !(flags & 4); });
+  lowBeam.position.x = cr.at; lowBeam.visible = cr.min - job.water < 0.8 && !(flags & 32);
+  const n = net.online ? Math.max(1, net.roster.length) : 1, rate = (W2.peak - W2.start) / (W2.riseSolo / (1 + 0.3 * (n - 1)));
+  const left = job.time < W2.grace ? W2.grace - job.time + (W2.peak - job.water) / rate : (W2.peak - job.water) / rate;
+  const margin = cr.min - job.water, rescued = cars.filter((c) => c.rescued).length;
+  const where = Math.abs(cr.at - F.gate.x) < 3 ? "the floodgate" : (F.breaches.find((b) => Math.abs(cr.at - b.x) < b.w / 2 + 2) || { name: `x ${cr.at.toFixed(0)}` }).name;
+  elTasks.innerHTML = `<h2>Flood Season</h2>
+    ${row(flags & 4, "Close the floodgate (push the grey gate into the slot)")}
+    ${row(flags & 8, `Plug the three breaches above the peak: ${nPlug} / ${F.breaches.length}`)}
+    ${row(flags & 32, job.water >= W2.peak ? `Hold until the river falls: ${Math.max(0, W2.hold - job.hold).toFixed(0)} s` : `Hold the river until it peaks (${clock(left)} to go)`)}
+    <div class="${margin < 0.4 ? "hot" : "sub"}">River ${job.water.toFixed(2)} m &middot; lowest point of the levee ${cr.min.toFixed(2)} m at ${where}</div>
+    <div class="sub" style="margin-top:6px">Bonus</div>
+    ${row(flags & 1, `Rescue the cars from the floodplain: ${rescued} / ${cars.length}`, "sub")}
+    ${row((flags & 64) || ((flags & 32) && !(flags & 2)), flags & 2 ? "No flooding (lost)" : "Finish without the village flooding", "sub")}
+    <div class="sub">Time ${clock(job.time)}</div>
+    <button id="leave">Back to the quarry</button>`;
+  let h = "";
+  const carsOut = cars.some((c) => !c.rescued && !c.lost);
+  if (!job.moved) h = `The river is rising behind the levee. The village has about ${Math.round(left / 60)} minutes. Close the floodgate and plug the three breaches (orange beams) above the peak. Lowest first!`;
+  else if (margin < 0.35) h = `The river is ${margin.toFixed(2)} m from coming over at <b>${where}</b> (red beam). Get dirt there now!`;
+  else if (carsOut && job.water < 0 && !(flags & 4)) h = "Two cars are parked outside the levee. Tow them in through a breach or the floodgate slot before you close it (bonus). The water reaches them soon.";
+  else if (!(flags & 4)) h = `Push or winch the grey floodgate into the slot in the levee (between the concrete walls), lined up with it.`;
+  else if (!(flags & 8)) h = `Fill the breaches with dirt from the borrow pits: above ${need.toFixed(1)} m all the way across. The ${where} is the lowest point right now. A dump truck from the <b class="p">vehicle yard</b> carries three buckets.`;
+  else h = "The levee is ready. Watch the lowest point until the river peaks and falls.";
+  setHint(h);
+}
+
+const siteStep = { hub: () => hubStep(), farm: () => farmStep(), river: () => riverStep(), ridge: () => ridgeStep(), haul: () => haulStep(), flood: () => floodStep() }[SITE];
+const siteCheck = { hub: () => checkHub(), farm: () => checkFarm(), river: () => checkRiver(), ridge: () => checkRidge(), haul: () => checkHaul(), flood: () => checkFlood() }[SITE];
+function checkHub() {
+  const rows = houses.map((hs) => {
+    const p = progress[hs.id];
+    const lk = isLocked(hs);
+    if (hs.garage) return `<div class="sub">&#128295; Garage: switch vehicle with ${K("F")}${rollerUnlocked() ? "" : " (road roller unlocks after job 1)"}</div>`;
+    if (hs.paint) return `<div class="sub">&#127912; Paint Shop (next to the garage): drive in and stop to customize, or ${K("G")} in the garage</div>`;
+    return `<div class="${p && p.done ? "done" : lk ? "sub" : ""}">${p && p.done ? "&#9733;" : lk ? "&#128274;" : "&#9675;"} ${hs.title}${p && p.done ? ` (${clock(p.best)})` : lk ? " (locked)" : ""}</div>`;
+  }).join("");
+  elTasks.innerHTML = `<h2>Quarry yard</h2><div class="sub">Drive into a house and stop to start a job.</div>${rows}<div class="sub" style="margin-top:6px">The rest of the quarry is a playground: dig, dump and push rocks anywhere.</div>`;
+  setHint(net.online && net.roster.length > 1 ? "Your crew is here. Whoever drives into a job house takes everyone along." : `Drive to the <b>${(houses.find((h) => !h.garage && !h.paint && !isLocked(h) && !(progress[h.id] && progress[h.id].done)) || houses[0]).title}</b> house and stop inside to start the job. ${K("H")} hides hints.`);
+}
+
+// ---------- loop ----------
+function physicsStep() {
+  stepCount++;
+  updatePeers();
+  driveStep();
+  winchStep();
+  parkStep();
+  updateDirt();
+  relaxStep();
+  flushTerrain();
+  if (stepCount % 10 === 0) {
+    for (const p of props) if (p.active && p.body.isDynamic()) { const t = p.body.translation(); p.body.setLinearDamping(p.damp + mudAt(t.x, t.z) * (p.type === "tractor" ? 4 : p.type === "crate" ? 5 : 2)); }
+  }
+  world.step();
+  if (chassis.translation().y < -40) resetLoader();
+  if (running) siteStep();
+  if (net.online) {
+    if (stepCount % 10 === 0) updateOwnership();
+    if (stepCount % 3 === 0) sendState();
+  }
+}
+
+// rope drawing: up to four ropes of ten segments each
+const ROPE_SEG = 10;
+const ropeMesh = new THREE.InstancedMesh(new THREE.CylinderGeometry(0.05, 0.05, 1, 5), lam(0x1d2126), ROPE_SEG * 4);
+ropeMesh.frustumCulled = false; ropeMesh.count = 0; scene.add(ropeMesh);
+const marker3 = new THREE.Mesh(new THREE.ConeGeometry(0.45, 1.0, 12).rotateX(Math.PI), new THREE.MeshBasicMaterial({ color: 0xffc928 }));
+marker3.visible = false; scene.add(marker3);
+const _ra = new THREE.Vector3(), _rb = new THREE.Vector3(), _r0 = new THREE.Vector3(), _r1 = new THREE.Vector3(), _ry = new THREE.Vector3(0, 1, 0), _rq = new THREE.Quaternion(), _rs = new THREE.Vector3(), _rsc = new THREE.Vector3();
+function drawRopes() {
+  let n = 0;
+  const rope = (A, B, len) => {
+    const d = A.distanceTo(B), sag = Math.min(4, Math.max(0, len - d) * 0.5);
+    for (let s = 0; s < ROPE_SEG; s++) {
+      const t0 = s / ROPE_SEG, t1 = (s + 1) / ROPE_SEG;
+      _r0.lerpVectors(A, B, t0); _r0.y -= sag * 4 * t0 * (1 - t0);
+      _r1.lerpVectors(A, B, t1); _r1.y -= sag * 4 * t1 * (1 - t1);
+      const l = _r0.distanceTo(_r1);
+      _rq.setFromUnitVectors(_ry, _rs.subVectors(_r1, _r0).normalize());
+      ropeMesh.setMatrixAt(n++, _m.compose(_rs.addVectors(_r0, _r1).multiplyScalar(0.5), _rq, _rsc.set(1, l, 1)));
+    }
+  };
+  if (winch.on) { const B = anchorPos(winch.kind, winch.ref, winch.local, _rb); if (B) rope(bodyPoint(chassis, HOOK, _ra), B, winch.len); }
+  for (const pr of net.peers.values()) {
+    const h = pr.h;
+    if (!h || !pr.seen || n >= ROPE_SEG * 4) continue;
+    const B = anchorPos(h[0], h[1], _wl.set(h[2], h[3], h[4]), _rb);
+    if (B) rope(bodyPoint(pr.loader.body, HOOK, _ra), B, h[5]);
+  }
+  ropeMesh.count = n; ropeMesh.instanceMatrix.needsUpdate = true;
+}
+
+const _f = new THREE.Vector3(), _target = new THREE.Vector3();
+function syncLoader(ld) {
+  const t = ld.body.translation(), r = ld.body.rotation();
+  ld.group.position.set(t.x, t.y, t.z); ld.group.quaternion.set(r.x, r.y, r.z, r.w);
+}
+function syncVisuals(dt, now = performance.now()) {
+  syncLoader(me);
+  for (let i = 0; i < 4; i++) {
+    const w = me.wheels[i];
+    w.steerNode.position.y = L.wy - (vehicle.wheelSuspensionLength(i) ?? L.rest);
+    w.steerNode.rotation.y = vehicle.wheelSteering(i) || 0;
+    w.spin.rotation.x = vehicle.wheelRotation(i) || 0;
+  }
+  if (me.kind === "roller") for (const d of me.drums) d.rotation.x = (vehicle.wheelRotation(0) || 0) * (L.wheelR / 0.85);
+  for (const peer of net.peers.values()) {
+    syncLoader(peer.loader);
+    for (const w of peer.loader.wheels) { w.steerNode.rotation.y = w.front ? peer.loader.steer : 0; w.spin.rotation.x = peer.loader.roll; }
+    for (const d of peer.loader.drums) d.rotation.x = peer.loader.roll;
+  }
+  for (const k of props) {
+    if (!k.active) continue;
+    const p = k.body.translation(), q = k.body.rotation();
+    k.mesh.position.set(p.x, p.y, p.z); k.mesh.quaternion.set(q.x, q.y, q.z, q.w);
+  }
+  partMesh.count = parts.n;
+  for (let i = 0; i < parts.n; i++) { const sc = parts.s[i]; partMesh.setMatrixAt(i, _m.makeScale(sc, sc, sc).setPosition(parts.x[i * 3], parts.x[i * 3 + 1], parts.x[i * 3 + 2])); }
+  for (let i = 0; i < parts.n; i++) partMesh.setColorAt(i, parts.g[i] > parts.vol[i] * 0.5 ? cGravel : cLoose);
+  partMesh.instanceMatrix.needsUpdate = true; if (partMesh.instanceColor) partMesh.instanceColor.needsUpdate = true;
+  drawRopes();
+  marker3.visible = !winch.on && !!target && running;
+  if (marker3.visible) marker3.position.set(target.pos.x, target.pos.y + 2.2 + Math.sin(now / 220) * 0.25, target.pos.z);
+
+  // chase camera, aimed a little ahead at the bucket
+  const t = me.group.position;
+  _f.set(0, 0, 1).applyQuaternion(me.group.quaternion);
+  const hd = Math.atan2(_f.x, _f.z);
+  let d = hd - cam.yaw; d = Math.atan2(Math.sin(d), Math.cos(d));
+  cam.yaw += d * Math.min(1, dt * 3.2);
+  const yaw = cam.yaw + cam.offset, ch = Math.cos(cam.pitch) * cam.dist;
+  _target.set(t.x + Math.sin(hd) * 2.5, t.y + 1.6, t.z + Math.cos(hd) * 2.5);
+  camera.position.set(_target.x - Math.sin(yaw) * ch, _target.y + Math.sin(cam.pitch) * cam.dist, _target.z - Math.cos(yaw) * ch);
+  camera.position.y = Math.max(camera.position.y, heightAt(camera.position.x, camera.position.z) + 1.2);
+  camera.lookAt(_target);
+  sun.target.position.copy(_target);
+  sun.position.copy(_target).addScaledVector(SUN_DIR, 110);
+
+  const isTruck = me.kind === "truck", fill = me.load / (isTruck ? KINDS.truck.cap : L.capacity), noun = isTruck ? "Bed" : "Bucket";
+  elFillBar.style.width = `${Math.round(fill * 100)}%`;
+  const gp = me.load > 0.05 ? Math.round((me.loadG / me.load) * 100) : 0;
+  const stuff = me.load > 0.05 ? (gp >= 85 ? "gravel" : gp >= 15 ? `${gp}% gravel` : "dirt") : "";
+  elFillBar.style.background = gp >= 50 ? "#b9bcc2" : fill > 0.98 ? "#8be28b" : "#c08a4a";
+  elFillText.textContent = (fill > 0.98 ? `${noun} full` : `${noun} ${Math.round(fill * 100)}%`) + (stuff ? ` \u00b7 ${stuff}` : "");
+  const kmh = Math.abs(me.speed) * 3.6;
+  elFill.style.display = me.kind !== "roller" ? "block" : "none";
+  if (isTruck) elGauges.innerHTML = `<b>${kmh.toFixed(0)}</b> km/h &nbsp; dump truck &nbsp; bed ${me.bed > 0.45 ? "tipping" : me.bed > 0.05 ? "raised" : "down"}`;
+  else if (me.kind !== "loader") elGauges.innerHTML = `<b>${kmh.toFixed(0)}</b> km/h &nbsp; ${KINDS[me.kind].name}`;
+  else elGauges.innerHTML = `<b>${kmh.toFixed(0)}</b> km/h &nbsp; arms ${Math.round(((me.arm - L.armMin) / (L.armMax - L.armMin)) * 100)}% &nbsp; bucket ${me.tilt > 0.25 ? "curled" : me.tilt < -0.12 ? "dumping" : "level"}`;
+  let pr = "";
+  if (winch.on) {
+    const strain = winch.T / WINCH.tmax;
+    pr = `Winch on <b>${winch.name}</b> &middot; rope ${winch.len.toFixed(0)} m ${strain > 0.95 ? '<span class="hot">&middot; full power</span>' : strain > 0.05 ? "&middot; pulling" : ""}<br>${K("Q")} reel in &nbsp; ${K("X")} let out &nbsp; ${K("E")} unhook`;
+  } else if (target && running) pr = `${K("E")} hook winch to <b>${target.name}</b> (${target.dist.toFixed(0)} m)`;
+  if (padNow && running && !customOpen) { const nk = nextKind(); pr += `${pr ? "<br>" : ""}${nk ? `${K("F")} switch to the <b>${KINDS[nk].name}</b>` : "No other vehicles unlocked yet"}`; }
+  const inPaint = inPaintShop();
+  if ((padNow === "garage" || inPaint) && running && !customOpen) pr += `${pr ? "<br>" : ""}${K("G")} paint shop`;
+  if (customOpen && padNow !== "garage" && !inPaint) closeCustom();
+  if (elPrompt.dataset.h !== pr) { elPrompt.dataset.h = pr; elPrompt.innerHTML = pr; elPrompt.style.display = pr ? "block" : "none"; }
+}
+
+let running = false, last = 0, acc = 0, hudAt = 0, padNow = null;
+function frame(now) { requestAnimationFrame(frame); tick(now); }
+function tick(now) {
+  const dt = Math.min(0.1, (now - last) / 1000 || 0); last = now;
+  padState = readPad();
+  if (pad.rx || pad.ry) { cam.offset -= pad.rx * 2.4 * dt; cam.pitch = clamp(cam.pitch + pad.ry * 1.3 * dt, 0.08, 1.25); }
+  if (running) {
+    readKeys();
+    acc += dt;
+    let n = 0;
+    while (acc >= DT && n++ < 4) { physicsStep(); acc -= DT; }
+    if (acc > DT) acc = 0;
+  }
+  syncVisuals(dt, now);
+  if (now - hudAt > 250) {
+    hudAt = now;
+    target = !winch.on && running ? findTarget() : null;
+    padNow = switchPad();
+    { const t = chassis.translation(); for (const b of buildings) b.roof.visible = !b.inside(t.x, t.z); }   // lift the roof off whatever you are parked in
+    siteCheck();
+  }
+  renderer.render(scene, camera);
+}
+
+// let the site settle before the first frame so nothing is falling when play starts
+poseBucket(me);
+for (const d of displays) poseBucket(d);
+{ const s = spawnAt(0); placeLoader(s.x, s.z, s.yaw); cam.yaw = s.yaw; }
+for (let i = 0; i < 90; i++) physicsStep();
+netEdits.clear(); netG.clear();
+requestAnimationFrame(frame);
+
+// ---------- lobby ----------
+const elStart = document.getElementById("start"), elMsg = document.getElementById("msg"), elName = document.getElementById("name"), elCode = document.getElementById("code");
+try { elName.value = localStorage.getItem("jobsite-name") || ""; } catch {}
+function begin() { elStart.style.display = "none"; running = true; }
+async function join(room) {
+  const name = (elName.value.trim() || "Driver").slice(0, 16);
+  try { localStorage.setItem("jobsite-name", name); } catch {}
+  elMsg.textContent = "Connecting…";
+  try { await connect(room, name); begin(); } catch (e) { elMsg.textContent = e.message; }
+}
+document.getElementById("solo").addEventListener("click", begin);
+document.getElementById("create").addEventListener("click", () => {
+  const abc = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  join(Array.from({ length: 4 }, () => abc[Math.floor(Math.random() * abc.length)]).join(""));
+});
+document.getElementById("join").addEventListener("click", () => {
+  const room = elCode.value.trim().toUpperCase();
+  if (!/^[A-Z2-9]{4}$/.test(room)) { elMsg.textContent = "Room codes are 4 letters or digits."; return; }
+  join(room);
+});
+for (const b of elStart.querySelectorAll("button")) b.disabled = false;
+elMsg.textContent = "";
+try { const kk = localStorage.getItem("jobsite-kind"); if (KINDS[kk] && kindOpen(kk)) setKind(me, kk); } catch {}
+// arriving from another site: rejoin the room, or carry on solo
+if (params.get("room") && /^[A-Z2-9]{4}$/.test(params.get("room"))) { elMsg.textContent = "Rejoining your crew…"; join(params.get("room")); }
+else if (params.get("solo")) begin();
+
+// hooks for automated checks
+window.__game = { SITE, world, chassis, vehicle, props, anchors, boulders, logs, stump: () => stump, tractor: () => tractor, input, me, job, L, WINCH, FARM, HUB, net, winch, heights, heightAt, mudAt, slopeAt,
+  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, HAUL, FLOOD, hopper: () => hopper, gate: () => gate, cars, leveeCrest, coverOf, padCells, gravH, nextKind, blockLog: () => blockLog, blockRocks, fordRocks, picnic: () => picnic, openCustom, closeCustom, setLook, stepLook, get myLook() { return myLook; }, get customOpen() { return customOpen; }, applyLook, cleanLook, RIDGE, ridgeRoad, cabin: () => cabin, firewood: () => firewood, ridgeRocks, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
+  get flags() { return flags; }, FL, parts, get target() { return target; }, get grip() { return gripNow; },
+  run(steps, set = {}) { Object.assign(input, set); for (let i = 0; i < steps; i++) physicsStep(); syncVisuals(DT); target = !winch.on ? findTarget() : null; siteCheck(); },
+  render() { renderer.render(scene, camera); } };
