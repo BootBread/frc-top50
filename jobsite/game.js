@@ -140,7 +140,7 @@ const design = { hub: hubDesign, farm: farmDesign, river: riverDesign }[SITE];
 // heights[zi + xi * W]: rows along z, columns along x, the layout Rapier's heightfield wants.
 // firm[i] is the top of undisturbed ground: anything above it is loose dirt.
 const heights = new Float32Array(W * W), base = new Float32Array(W * W), firm = new Float32Array(W * W),
-  loose = new Uint8Array(W * W), mudA = new Float32Array(W * W), grav = new Uint8Array(W * W);
+  loose = new Uint8Array(W * W), mudA = new Float32Array(W * W), gravH = new Float32Array(W * W);   // gravH: thickness of gravel lying on top
 const sinkIdx = [], sinkTarget = [];
 for (let xi = 0; xi <= G; xi++) for (let zi = 0; zi <= G; zi++) {
   const x = xi * CELL - HALF, z = zi * CELL - HALF, i = zi + xi * W, d = design(x, z);
@@ -153,7 +153,8 @@ function sample(arr, x, z) {
   return lerp(lerp(arr[i], arr[i + W], tx), lerp(arr[i + 1], arr[i + W + 1], tx), tz);
 }
 const heightAt = (x, z) => sample(heights, x, z);
-const mudAt = (x, z) => sample(mudA, x, z);
+// a layer of gravel makes mud firm
+const mudAt = (x, z) => sample(mudA, x, z) * (1 - smooth(0.03, 0.12, sample(gravH, x, z)));
 function slopeAt(x, z) {
   const gx = (heightAt(x + 0.75, z) - heightAt(x - 0.75, z)) / 1.5, gz = (heightAt(x, z + 0.75) - heightAt(x, z - 0.75)) / 1.5;
   return Math.atan(Math.hypot(gx, gz));
@@ -239,11 +240,11 @@ function buildMesh(c) {
     const ia = az + ax * W, ib = bz + bx * W, ic = cz + cx * W, ha = heights[ia], hb = heights[ib], hc = heights[ic];
     const wx = ((ax + bx + cx) / 3) * CELL - HALF, wz = ((az + bz + cz) / 3) * CELL - HALF;
     groundColor(wx, wz, (ha + hb + hc) / 3, (Math.max(ha, hb, hc) - Math.min(ha, hb, hc)) / CELL);
-    const l = loose[ia] + loose[ib] + loose[ic], m = (mudA[ia] + mudA[ib] + mudA[ic]) / 3;
+    const l = loose[ia] + loose[ib] + loose[ic], gq = (gravH[ia] + gravH[ib] + gravH[ic]) / 3;
+    const m = ((mudA[ia] + mudA[ib] + mudA[ic]) / 3) * (1 - smooth(0.03, 0.12, gq));
     if (l) _c.lerp(cLoose, 0.3 * l);
     if (m > 0.05) _c.lerp(cMud, Math.min(1, m) * 0.85);
-    const gv = grav[ia] + grav[ib] + grav[ic];
-    if (gv) _c.lerp(cGravel, 0.3 * gv);
+    if (gq > 0.008) _c.lerp(cGravel, Math.min(1, gq / 0.06));
     _c.multiplyScalar(0.93 + hash2(ax * 3 + bx, az * 5 + cz) * 0.14);
     pos[o] = ax * CELL - HALF; pos[o + 1] = ha; pos[o + 2] = az * CELL - HALF;
     pos[o + 3] = bx * CELL - HALF; pos[o + 4] = hb; pos[o + 5] = bz * CELL - HALF;
@@ -270,13 +271,23 @@ function markDirty(xi, zi) {
 }
 const netEdits = new Map();          // vertex index -> height change made here since the last network send
 // Every terrain change goes through here. Returns the change actually applied (bedrock stops digging).
-function addHeight(xi, zi, dh, mine = true) {
+// g is how much of an added amount is gravel. Taking ground away takes the gravel on top first:
+// lastG says how much gravel the last call removed.
+const netG = new Map();              // vertex index -> gravel thickness change made here since the last network send
+let lastG = 0;
+function addHeight(xi, zi, dh, mine = true, g = 0) {
+  lastG = 0;
   if (xi < 1 || zi < 1 || xi >= G || zi >= G) return 0;
   const i = zi + xi * W, h = Math.max(base[i] - BEDROCK, heights[i] + dh), d = h - heights[i];
   if (d === 0) return 0;
   heights[i] = h; loose[i] = 1; markDirty(xi, zi);
   if (h < firm[i]) firm[i] = h;
-  if (mine) netEdits.set(i, (netEdits.get(i) || 0) + d);
+  if (mine) {
+    netEdits.set(i, (netEdits.get(i) || 0) + d);
+    let dg = 0;
+    if (d < 0) { dg = -Math.min(gravH[i], -d); lastG = -dg; } else if (g > 0) dg = Math.min(g, d);
+    if (dg) { gravH[i] = Math.max(0, gravH[i] + dg); netG.set(i, (netG.get(i) || 0) + dg); }
+  }
   return d;
 }
 function flushTerrain() {
@@ -307,8 +318,8 @@ function relaxStep() {
     const ia = za + xa * W, ib = zb + xb * W, d = heights[ia] - heights[ib], hi = d > 0 ? ia : ib;
     const over = Math.abs(d) - (heights[hi] - firm[hi] > 0.03 ? looseSlope(hi) : 1.5) * CELL;
     if (over <= 0.01) return;
-    const took = -addHeight(d > 0 ? xa : xb, d > 0 ? za : zb, -over * 0.3);
-    if (took > 0) { addHeight(d > 0 ? xb : xa, d > 0 ? zb : za, took); moved = true; }
+    const took = -addHeight(d > 0 ? xa : xb, d > 0 ? za : zb, -over * 0.3), tookG = lastG;
+    if (took > 0) { addHeight(d > 0 ? xb : xa, d > 0 ? zb : za, took, true, tookG); moved = true; }
   };
   for (let it = 0; it < 2; it++) for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) { pair(x, z, x + 1, z); pair(x, z, x, z + 1); }
   if (moved) active.ttl = 50;
@@ -583,21 +594,22 @@ if (SITE === "river") {
   for (const [x, z, r] of R.rocks) riverRocks.push(addRock(x, z, r, "rock"));
 }
 // Crushing a rock spreads it into a patch of gravel: firm footing over mud.
-function layGravel(idx, x, z, r) {
-  if (gravel.some((g) => g[0] === idx)) return;
-  gravel.push([idx, r3(x), r3(z), r3(r)]);
+function markCrushed(idx) {
+  if (gravel.includes(idx)) return false;
+  gravel.push(idx);
   const p = props[idx];
   if (p && p.active) { p.active = false; p.body.setEnabled(false); p.mesh.visible = false; if (winch.on && winch.kind === 1 && winch.ref === idx) hookOff(); }
-  const xa = Math.max(1, Math.floor((x - r + HALF) / CELL)), xb = Math.min(G - 1, Math.ceil((x + r + HALF) / CELL));
-  const za = Math.max(1, Math.floor((z - r + HALF) / CELL)), zb = Math.min(G - 1, Math.ceil((z + r + HALF) / CELL));
-  for (let xi = xa; xi <= xb; xi++) for (let zi = za; zi <= zb; zi++) {
-    const d = Math.hypot(xi * CELL - HALF - x, zi * CELL - HALF - z);
-    if (d > r) continue;
-    const i = zi + xi * W;
-    mudA[i] *= smooth(r * 0.75, r, d); if (d < r * 0.9) grav[i] = 1;
-    markDirty(xi, zi);
+  return true;
+}
+// Called by whoever crushed it: the rock becomes a heap of loose gravel you can scoop, carry and spread.
+function layGravel(idx, x, z, size) {
+  if (!markCrushed(idx)) return;
+  const vol = 3 + size * 3, n = 30;
+  for (let k = 0; k < n; k++) {
+    const a = Math.random() * Math.PI * 2, d = Math.sqrt(Math.random()) * (1.2 + size);
+    splat(x + Math.cos(a) * d, z + Math.sin(a) * d, vol / n, vol / n);
   }
-  for (let k = 0; k < 24; k++) spawnDirt(x + (Math.random() - 0.5) * 2, heightAt(x, z) + 0.6, z + (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 6, 3 + Math.random() * 3, (Math.random() - 0.5) * 6, 0);
+  for (let k = 0; k < 24; k++) spawnDirt(x + (Math.random() - 0.5) * 2, heightAt(x, z) + 0.8, z + (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 6, 3 + Math.random() * 3, (Math.random() - 0.5) * 6, 0, 1);
 }
 
 function setActiveBoulders(n) {
@@ -661,7 +673,7 @@ function makeLoader(slot, local) {
     box(steel, 0.1, 0.95, 1.3, -1.45, 0.45, 0.62, bucketPivot),
   ];
   box(dark, 2.9, 0.06, 0.12, 0, 0.0, 1.3, bucketPivot);       // cutting edge (visual only)
-  const heap = new THREE.Mesh(new THREE.SphereGeometry(1, 9, 5), dirtMat);
+  const heap = new THREE.Mesh(new THREE.SphereGeometry(1, 9, 5), lam(0x8a6238, true));
   heap.position.set(0, 0.08, 0.62); heap.visible = false; heap.castShadow = true; bucketPivot.add(heap);
 
   const s = spawnAt(slot);
@@ -698,7 +710,7 @@ function makeLoader(slot, local) {
     const mark = new THREE.Mesh(new THREE.BoxGeometry(w + 0.02, 0.12, 0.4), dark); mark.position.y = 0.81; d.add(mark);
     return d;
   });
-  return { slot, paint, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, roll: 0,
+  return { slot, paint, group, armPivot, bucketPivot, bucketParts, bucketColliders, heap, body, wheels, arm: -0.5, tilt: 0.1, steer: 0, speed: 0, load: 0, loadG: 0, roll: 0,
     kind: "loader", vis: { loader: loaderVis, roller: rollerVis }, drums };
 }
 function setKind(ld, kind) {
@@ -767,7 +779,7 @@ function poseBucket(ld) {
   }
   const f = ld.load / L.capacity;
   ld.heap.visible = f > 0.03;
-  if (ld.heap.visible) ld.heap.scale.set(1.35, 0.2 + 0.95 * f, 0.45 + 0.25 * f);
+  if (ld.heap.visible) { ld.heap.scale.set(1.35, 0.2 + 0.95 * f, 0.45 + 0.25 * f); ld.heap.material.color.copy(ld.loadG > ld.load * 0.5 ? cGravel : cLoose); }
 }
 
 // world matrix of my bucket (origin at the back of the floor, z out to the lip, y up through the floor)
@@ -797,27 +809,28 @@ function scoopAssist(speed) {
 // ---------- falling dirt ----------
 // Dumped dirt leaves the bucket as clods that fall and only become ground where they land.
 const PMAX = 900, PVOL = 0.012;
-const parts = { n: 0, x: new Float32Array(PMAX * 3), v: new Float32Array(PMAX * 3), vol: new Float32Array(PMAX), s: new Float32Array(PMAX) };
-const partMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.17, 0), dirtMat, PMAX);
+const parts = { n: 0, x: new Float32Array(PMAX * 3), v: new Float32Array(PMAX * 3), vol: new Float32Array(PMAX), g: new Float32Array(PMAX), s: new Float32Array(PMAX) };
+const partMesh = new THREE.InstancedMesh(new THREE.IcosahedronGeometry(0.17, 0), lam(0xffffff, true), PMAX);
 partMesh.count = 0; partMesh.frustumCulled = false; partMesh.castShadow = true; scene.add(partMesh);
-function splat(x, z, vol) {
-  const fx = (x + HALF) / CELL, fz = (z + HALF) / CELL, xi = Math.floor(fx), zi = Math.floor(fz), tx = fx - xi, tz = fz - zi, v = vol / (CELL * CELL);
-  addHeight(xi, zi, v * (1 - tx) * (1 - tz)); addHeight(xi + 1, zi, v * tx * (1 - tz));
-  addHeight(xi, zi + 1, v * (1 - tx) * tz); addHeight(xi + 1, zi + 1, v * tx * tz);
+function splat(x, z, vol, gvol = 0) {
+  const fx = (x + HALF) / CELL, fz = (z + HALF) / CELL, xi = Math.floor(fx), zi = Math.floor(fz), tx = fx - xi, tz = fz - zi, v = vol / (CELL * CELL), gv = gvol / (CELL * CELL);
+  const put = (ax, az, w) => addHeight(ax, az, v * w, true, gv * w);
+  put(xi, zi, (1 - tx) * (1 - tz)); put(xi + 1, zi, tx * (1 - tz)); put(xi, zi + 1, (1 - tx) * tz); put(xi + 1, zi + 1, tx * tz);
   touch(xi, zi);
 }
-function spawnDirt(px, py, pz, vx, vy, vz, vol) {
-  if (parts.n >= PMAX) { if (vol) splat(px, pz, vol); return; }
+// gvol is the part of the clod that is gravel (with vol 0 it only picks the colour)
+function spawnDirt(px, py, pz, vx, vy, vz, vol, gvol = 0) {
+  if (parts.n >= PMAX) { if (vol) splat(px, pz, vol, gvol); return; }
   const i = parts.n++, o = i * 3;
   parts.x[o] = px; parts.x[o + 1] = py; parts.x[o + 2] = pz; parts.v[o] = vx; parts.v[o + 1] = vy; parts.v[o + 2] = vz;
-  parts.vol[i] = vol; parts.s[i] = 0.7 + Math.random() * 0.9;
+  parts.vol[i] = vol; parts.g[i] = gvol; parts.s[i] = 0.7 + Math.random() * 0.9;
 }
 // vol 0 makes clods that are only for show (another player's dirt: their own game moves the ground)
 const _pv = new THREE.Vector3(), _pd = new THREE.Vector3();
-function pourFrom(matrix, vel, vol) {
+function pourFrom(matrix, vel, vol, gvol = 0) {
   _pv.set((Math.random() - 0.5) * 2.6, 0.12, 0.85 + Math.random() * 0.45).applyMatrix4(matrix);
   _pd.setFromMatrixColumn(matrix, 2).multiplyScalar(1 + Math.random() * 0.8);
-  spawnDirt(_pv.x, _pv.y, _pv.z, vel.x + _pd.x + (Math.random() - 0.5) * 0.5, vel.y + _pd.y, vel.z + _pd.z + (Math.random() - 0.5) * 0.5, vol);
+  spawnDirt(_pv.x, _pv.y, _pv.z, vel.x + _pd.x + (Math.random() - 0.5) * 0.5, vel.y + _pd.y, vel.z + _pd.z + (Math.random() - 0.5) * 0.5, vol, gvol);
 }
 function updateDirt() {
   for (let i = parts.n - 1; i >= 0; i--) {
@@ -825,19 +838,19 @@ function updateDirt() {
     v[o + 1] -= 9.81 * DT;
     x[o] += v[o] * DT; x[o + 1] += v[o + 1] * DT; x[o + 2] += v[o + 2] * DT;
     if (x[o + 1] > heightAt(x[o], x[o + 2]) + 0.05) continue;
-    if (parts.vol[i] > 0) splat(x[o], x[o + 2], parts.vol[i]);
+    if (parts.vol[i] > 0) splat(x[o], x[o + 2], parts.vol[i], parts.g[i]);
     const l = --parts.n, lo = l * 3;                               // remove by moving the last clod into this slot
     x[o] = x[lo]; x[o + 1] = x[lo + 1]; x[o + 2] = x[lo + 2]; v[o] = v[lo]; v[o + 1] = v[lo + 1]; v[o + 2] = v[lo + 2];
-    parts.vol[i] = parts.vol[l]; parts.s[i] = parts.s[l];
+    parts.vol[i] = parts.vol[l]; parts.g[i] = parts.g[l]; parts.s[i] = parts.s[l];
   }
 }
 let pourAcc = 0;
 
 // Put a volume of dirt on the ground under a point of the bucket (lz metres out from its back), spread across its width.
-function deposit(vol, lz) {
+function deposit(vol, lz, gvol = 0) {
   for (const lx of [-1.1, -0.37, 0.37, 1.1]) {
     _rp.set(lx, 0, lz).applyMatrix4(_bw);
-    splat(_rp.x, _rp.z, vol / 4);
+    splat(_rp.x, _rp.z, vol / 4, gvol / 4);
   }
 }
 
@@ -846,7 +859,7 @@ function deposit(vol, lz) {
 const _bp = new THREE.Vector3();
 function digStep() {
   const P = _bp.setFromMatrixPosition(_bw);
-  let cut = 0, cutFirm = 0;
+  let cut = 0, cutFirm = 0, cutG = 0;
   if (me.tilt > -0.1 && _up.y > 0.35 && P.y - heightAt(P.x, P.z) < 3) {      // a bucket tipped to dump doesn't cut
     let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9;
     for (const [lx, lz] of [[-1.5, -0.15], [1.5, -0.15], [-1.5, 1.4], [1.5, 1.4]]) {
@@ -865,23 +878,24 @@ function digStep() {
       // loose dirt scoops up fast; firm ground is shaved a little at a time, so the bucket can't bury itself
       const soft = Math.min(over, Math.max(0, heights[i] - firm[i]), L.looseRate * DT);
       const hard = heights[i] - soft - firm[i] < 1e-3 ? Math.min(over - soft, L.firmRate * DT) : 0;
-      cut -= addHeight(xi, zi, -(soft + hard)) * CELL * CELL; cutFirm += hard * CELL * CELL; touch(xi, zi);
+      cut -= addHeight(xi, zi, -(soft + hard)) * CELL * CELL; cutG += lastG * CELL * CELL; cutFirm += hard * CELL * CELL; touch(xi, zi);
     }
   }
   me.cut = cut;
   if (cut > 0) {
-    const take = Math.min(cut, L.capacity - me.load);
-    me.load += take;
-    if (cut - take > 1e-4) deposit(cut - take, 2.1);
+    const take = Math.min(cut, L.capacity - me.load), takeG = (cutG * take) / cut;
+    me.load += take; me.loadG += takeG;
+    if (cut - take > 1e-4) deposit(cut - take, 2.1, cutG - takeG);
     const v = chassis.linvel(), sp = Math.hypot(v.x, v.z);                          // moving dirt is hard work: it slows the loader
     if (sp > 0.05) { const j = Math.min(L.loadDrag * take + L.pushDrag * (cut - take) + L.firmDrag * cutFirm, L.mass * sp * 0.3) / sp; chassis.applyImpulse({ x: -v.x * j, y: 0, z: -v.z * j }, true); }
   }
   if (me.tilt < -0.12 && me.load > 0) {                                             // dirt starts sliding out as soon as the bucket tips forward
     const out = Math.min(me.load, L.pour * DT * clamp((-0.12 - me.tilt) / 0.45, 0.25, 1));
-    me.load -= out; if (me.load < 1e-3) me.load = 0;
+    const gf = clamp(me.loadG / me.load, 0, 1);
+    me.load -= out; me.loadG = Math.max(0, me.loadG - out * gf); if (me.load < 1e-3) { me.load = 0; me.loadG = 0; }
     pourAcc += out;
     const v = chassis.linvel();
-    while (pourAcc >= PVOL || (me.load === 0 && pourAcc > 1e-5)) { const vol = Math.min(PVOL, pourAcc); pourAcc -= vol; pourFrom(_bw, v, vol); }
+    while (pourAcc >= PVOL || (me.load === 0 && pourAcc > 1e-5)) { const vol = Math.min(PVOL, pourAcc); pourAcc -= vol; pourFrom(_bw, v, vol, vol * gf); }
   }
 }
 
@@ -912,7 +926,7 @@ function rollStep(speed) {
     _rp.set(p.x, p.y, p.z).applyMatrix4(_ci);
     const under = Math.abs(_rp.x) < 1.5 + k.r * 0.4 && _rp.y < 0.6 && ((_rp.z > 0.4 && _rp.z < 2.8 + k.r) || (_rp.z < -0.4 && _rp.z > -2.6 - k.r));
     k.squash = under ? (k.squash || 0) + DT : 0;
-    if (k.squash > 0.22) { k.squash = 0; layGravel(k.index, p.x, p.z, 2.8 + k.r * 1.7); }
+    if (k.squash > 0.22) { k.squash = 0; layGravel(k.index, p.x, p.z, k.r); }
   }
 }
 function switchPad() {
@@ -925,7 +939,7 @@ function switchVehicle() {
   if (!switchPad() || Math.abs(me.speed) > 2) return;
   const next = me.kind === "loader" ? "roller" : "loader";
   if (next === "roller" && !rollerUnlocked()) return showBanner("<b>Road roller locked</b>Finish Muddle Acres to unlock it.", 3500);
-  if (me.load > 0) { deposit(me.load, 1.6); me.load = 0; }
+  if (me.load > 0) { deposit(me.load, 1.6, me.loadG); me.load = 0; me.loadG = 0; }
   setKind(me, next);
   try { localStorage.setItem("jobsite-kind", next); } catch {}
   showBanner(`<b>${KINDS[next].name[0].toUpperCase() + KINDS[next].name.slice(1)}</b>${next === "roller" ? "Drive over rocks to crush them into gravel. No bucket, same winch." : "Bucket and winch."}`, 4000);
@@ -1113,7 +1127,9 @@ function buildSync() {
   const rk = [], tr = [];
   for (const r of props) { const p = r.body.translation(), q = r.body.rotation(); rk.push(r3(p.x), r3(p.y), r3(p.z), r3(q.x), r3(q.y), r3(q.z), r3(q.w)); }
   for (let i = 0; i < heights.length; i++) if (heights[i] !== base[i]) tr.push(i, Math.round(heights[i] * 1000));
-  return { t: "sync", ver: SYNC_VER, site: SITE, rk, tr, time: Math.round(job.time), flags, nb: activeBoulders, gv: gravel };
+  const gt = [];
+  for (let i = 0; i < gravH.length; i++) if (gravH[i] > 0.001) gt.push(i, Math.round(gravH[i] * 1000));
+  return { t: "sync", ver: SYNC_VER, site: SITE, rk, tr, time: Math.round(job.time), flags, nb: activeBoulders, gv: gravel, gt };
 }
 function applySync(s) {
   if (!s || s.ver !== SYNC_VER || s.site !== SITE || !Array.isArray(s.rk) || !Array.isArray(s.tr)) return;
@@ -1123,7 +1139,9 @@ function applySync(s) {
   }
   flushTerrain();
   if (SITE === "farm") setActiveBoulders(Math.max(activeBoulders, s.nb || 5));
-  if (Array.isArray(s.gv)) for (const g of s.gv) layGravel(g[0], g[1], g[2], g[3]);
+  if (Array.isArray(s.gv)) for (const g of s.gv) markCrushed(g);
+  if (Array.isArray(s.gt)) for (let k = 0; k + 1 < s.gt.length; k += 2) { const i = s.gt[k]; if (i > 0 && i < gravH.length) { gravH[i] = s.gt[k + 1] / 1000; markDirty(Math.floor(i / W), i % W); } }
+  flushTerrain();
   for (let f = 1; f <= 64; f <<= 1) if (s.flags & f && f !== FL.done) setFlag(f);
   for (let n = 0; n < props.length && n * 7 + 6 < s.rk.length; n++) {
     const a = s.rk, o = n * 7, b = props[n].body;
@@ -1191,7 +1209,8 @@ function onPeerMessage(from, m) {
   setKind(peer.loader, m.k === 1 ? "roller" : "loader");
   if (m.fl) for (let f = 1; f <= 64; f <<= 1) if (m.fl & f) setFlag(f);
   if (SITE === "farm" && m.nb > activeBoulders) setActiveBoulders(m.nb);
-  if (Array.isArray(m.gv)) for (const g of m.gv) layGravel(g[0], g[1], g[2], g[3]);
+  if (Array.isArray(m.gv)) for (const g of m.gv) markCrushed(g);
+  if (m.eg) for (let k = 0; k + 1 < m.eg.length; k += 2) { const i = m.eg[k]; if (i > 0 && i < gravH.length) { gravH[i] = Math.max(0, gravH[i] + m.eg[k + 1] / 1000); markDirty(Math.floor(i / W), i % W); } }
   if (m.e) for (let k = 0; k + 1 < m.e.length; k += 2) { const i = m.e[k]; addHeight(Math.floor(i / W), i % W, m.e[k + 1] / 1000, false); }
   if (m.r) for (let k = 0; k + 13 < m.r.length; k += 14) {
     const a = m.r, prop = props[a[k]];
@@ -1234,6 +1253,9 @@ function sendState() {
   }
   for (const [i, d] of netEdits) { const mm = Math.round(d * 1000); if (mm) e.push(i, mm); }
   netEdits.clear();
+  const eg = [];
+  for (const [i, d] of netG) { const mm = Math.round(d * 1000); if (mm) eg.push(i, mm); }
+  netG.clear();
   const m = { t: "s", p: [r3(t.x), r3(t.y), r3(t.z)], q: [r3(q.x), r3(q.y), r3(q.z), r3(q.w)], a: r3(me.arm), b: r3(me.tilt), w: r3(me.steer), l: r3(me.load), v: r3(me.speed), k: me.kind === "roller" ? 1 : 0 };
   if (winch.on) m.h = [winch.kind, winch.ref, r3(winch.local.x), r3(winch.local.y), r3(winch.local.z), r3(winch.len), Math.round(winch.T)];
   if (flags) m.fl = flags;
@@ -1241,6 +1263,7 @@ function sendState() {
   if (gravel.length) m.gv = gravel;
   if (rk.length) m.r = rk;
   if (e.length) m.e = e;
+  if (eg.length) m.eg = eg;
   send(m);
   if (net.hostId === net.id && performance.now() - net.lastSave > 30000) { net.lastSave = performance.now(); send({ t: "save", site: SITE, d: JSON.stringify(buildSync()) }); }
 }
@@ -1527,7 +1550,7 @@ function riverStep() {
     }
   }
   if (hit >= 0 && hit === smash.i) {
-    if ((smash.t += DT) > 0.4) { const k = props[hit], p = k.body.translation(); layGravel(hit, p.x, p.z, 2.8 + k.r * 1.7); smash.t = 0; smash.i = -1; }
+    if ((smash.t += DT) > 0.4) { const k = props[hit], p = k.body.translation(); layGravel(hit, p.x, p.z, k.r); smash.t = 0; smash.i = -1; }
   } else { smash.i = hit; smash.t = 0; }
   if (stepCount % 20 === 0) {
     for (const p of props) {                       // a crate that falls in deep water washes back to where it started
@@ -1585,9 +1608,12 @@ function checkRiver() {
     : `Build a causeway: fill your bucket at the <b>dirt bank</b> west of the road (lower the bucket ${K("&darr;")} and drive in), then dump it into the shallows at the <b class="o">orange ring</b>. Deep water sweeps you away.`;
   else if (!paved) {
     if (!far) h = "The causeway holds! Drive across.";
-    else if (me.kind === "roller") h = "Roll over the rocks to crush them into gravel. A rock crushed on the swamp mud makes firm ground: push rocks onto the mud with a loader first, or nudge them with the drum.";
-    else if (nearRock) h = `Push a rock onto the dark swamp mud. Then raise the bucket ${K("&uarr;")}, hang it over the rock and hold ${K("&darr;")} to smash it into gravel. The road roller from the <b class="p">vehicle yard</b> crushes rocks just by driving over them.`;
-    else h = "The swamp ahead is too boggy to cross. Rocks crushed into gravel make firm ground: find the grey rocks on this bank.";
+    else if (me.kind === "roller") h = `Roll over the rocks to crush them into heaps of gravel. Then switch back to the loader (${K("F")} at the vehicle yard) to scoop the gravel and spread it over the swamp.`;
+    else if (nearRock) h = me.loadG > 0.5
+      ? `Tip the gravel ${K("&rarr;")} onto the dark swamp mud. A layer of gravel makes it firm enough to drive on: build a strip right across.`
+      : `Crush a rock: raise the bucket ${K("&uarr;")}, hang it over the rock and hold ${K("&darr;")}. It leaves a heap of grey gravel: scoop it like dirt and spread it over the swamp. (The road roller crushes rocks by driving over them.)`;
+    else h = me.loadG > 0.5 ? `Tip the gravel ${K("&rarr;")} onto the dark swamp mud to make a firm strip across it.`
+      : "The swamp ahead is too boggy to cross. Crush the grey rocks on this bank into gravel, then scoop the gravel and spread it over the mud.";
   } else if (!(flags & FL.done)) {
     if (winch.on && winch.kind === 1 && winch.ref === crate.index) h = `Tow it home: over your gravel, across the causeway, to the <b class="g">depot</b> (green ring). If it falls in deep water it washes back.`;
     else if (cp.z > R.mid) h = `Follow the road north to the red generator. Turn your back to it, hook it with ${K("E")} and tow it home.`;
@@ -1686,7 +1712,8 @@ function syncVisuals(dt, now = performance.now()) {
   }
   partMesh.count = parts.n;
   for (let i = 0; i < parts.n; i++) { const sc = parts.s[i]; partMesh.setMatrixAt(i, _m.makeScale(sc, sc, sc).setPosition(parts.x[i * 3], parts.x[i * 3 + 1], parts.x[i * 3 + 2])); }
-  partMesh.instanceMatrix.needsUpdate = true;
+  for (let i = 0; i < parts.n; i++) partMesh.setColorAt(i, parts.g[i] > parts.vol[i] * 0.5 ? cGravel : cLoose);
+  partMesh.instanceMatrix.needsUpdate = true; if (partMesh.instanceColor) partMesh.instanceColor.needsUpdate = true;
   drawRopes();
   marker3.visible = !winch.on && !!target && running;
   if (marker3.visible) marker3.position.set(target.pos.x, target.pos.y + 2.2 + Math.sin(now / 220) * 0.25, target.pos.z);
@@ -1707,8 +1734,10 @@ function syncVisuals(dt, now = performance.now()) {
 
   const fill = me.load / L.capacity;
   elFillBar.style.width = `${Math.round(fill * 100)}%`;
-  elFillBar.style.background = fill > 0.98 ? "#8be28b" : "#c08a4a";
-  elFillText.textContent = fill > 0.98 ? "Bucket full" : `Bucket ${Math.round(fill * 100)}%`;
+  const gp = me.load > 0.05 ? Math.round((me.loadG / me.load) * 100) : 0;
+  const stuff = me.load > 0.05 ? (gp >= 85 ? "gravel" : gp >= 15 ? `${gp}% gravel` : "dirt") : "";
+  elFillBar.style.background = gp >= 50 ? "#b9bcc2" : fill > 0.98 ? "#8be28b" : "#c08a4a";
+  elFillText.textContent = (fill > 0.98 ? "Bucket full" : `Bucket ${Math.round(fill * 100)}%`) + (stuff ? ` \u00b7 ${stuff}` : "");
   const kmh = Math.abs(me.speed) * 3.6;
   elFill.style.display = me.kind === "loader" ? "block" : "none";
   if (me.kind !== "loader") elGauges.innerHTML = `<b>${kmh.toFixed(0)}</b> km/h &nbsp; ${KINDS[me.kind].name}`;
@@ -1751,7 +1780,7 @@ poseBucket(me);
 for (const d of displays) poseBucket(d);
 { const s = spawnAt(0); placeLoader(s.x, s.z, s.yaw); cam.yaw = s.yaw; }
 for (let i = 0; i < 90; i++) physicsStep();
-netEdits.clear();
+netEdits.clear(); netG.clear();
 requestAnimationFrame(frame);
 
 // ---------- lobby ----------
