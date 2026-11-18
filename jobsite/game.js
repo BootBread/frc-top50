@@ -2828,7 +2828,7 @@ function optHtml(row, v) {
 function renderCustom() {
   elCustom.innerHTML = `<h2>Paint shop</h2>` + LOOK_ROWS.map((row, r) => `<div class="crow ${r === customRow ? "sel" : ""}"><span class="lab">${row.label}</span>${row.opts
     .map((v) => `<button data-r="${r}" data-v="${v}" class="${myLook[row.key] === v ? "on" : ""}">${optHtml(row, v)}</button>`).join("")}</div>`).join("")
-    + `<div class="sub">${pad.on ? `<kbd>D-pad</kbd> choose &nbsp; <kbd>A</kbd> done` : `<kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd> or click to choose &nbsp; <kbd>G</kbd> done`}</div>`;
+    + `<div class="sub">${pad.on ? `<kbd>D-pad</kbd> choose &nbsp; <kbd>${PB("A")}</kbd> done` : `<kbd>&uarr;</kbd><kbd>&darr;</kbd><kbd>&larr;</kbd><kbd>&rarr;</kbd> or click to choose &nbsp; <kbd>G</kbd> done`}</div>`;
 }
 function setLook(key, v) {
   myLook = { ...myLook, [key]: v };
@@ -2855,7 +2855,15 @@ elCustom.addEventListener("click", (e) => {
 // ---------- controller ----------
 // Standard (Xbox-style) layout. Left stick steers, triggers drive, bumpers move the arms,
 // X / B curl and dump, A brakes, Y hooks the winch, D-pad up / down reels, right stick looks around.
-const pad = { on: false, prev: [], rx: 0, ry: 0 };
+const pad = { on: false, prev: [], rx: 0, ry: 0, style: "xbox" };
+// Button names for the pad in use. Browsers put a PlayStation pad's buttons in the same places as an Xbox
+// pad's (cross where A is, circle where B is...), so only the labels change.
+const PAD_NAMES = {
+  xbox: { A: "A", B: "B", X: "X", Y: "Y", LB: "LB", RB: "RB", LT: "LT", RT: "RT", View: "View", Menu: "Menu" },
+  ps: { A: '<span style="color:#7fb2ff">&#10005;</span>', B: '<span style="color:#ff6a6a">&#9675;</span>', X: '<span style="color:#ff8ad8">&#9633;</span>', Y: '<span style="color:#6fe0a8">&#9651;</span>',
+    LB: "L1", RB: "R1", LT: "L2", RT: "R2", View: "Create", Menu: "Options" },
+};
+const PB = (n) => PAD_NAMES[pad.style][n] ?? n;
 const PAD_LABEL = { KeyW: "RT", KeyS: "LT", KeyA: "Left stick", KeyD: "", Space: "A", ArrowUp: "RB", ArrowDown: "LB", ArrowLeft: "X", ArrowRight: "B",
   KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyG: "D-pad &larr;", KeyR: "View", KeyC: "R3", KeyH: "Menu", KeyO: "L3", KeyL: "L3", Enter: "Menu" };
 function readPad() {
@@ -2863,6 +2871,9 @@ function readPad() {
   let gp = null;
   for (const g of list) if (g && g.connected && g.buttons.length >= 16) { gp = g; break; }
   if (!gp) { if (pad.on) { pad.on = false; refreshHelp(); } pad.rx = pad.ry = 0; return null; }
+  // 054c is Sony's maker id; some browsers just call a PS4 pad "Wireless Controller" (Xbox pads say "Xbox")
+  const style = /054c|dualsense|dualshock|playstation/i.test(gp.id) || (/wireless controller/i.test(gp.id) && !/xbox|045e/i.test(gp.id)) ? "ps" : "xbox";
+  if (style !== pad.style) { pad.style = style; const sa = document.getElementById("padA"); if (sa) sa.innerHTML = PB("A"); if (pad.on) refreshHelp(); }
   const dz = (v) => (Math.abs(v) < 0.16 ? 0 : (v - Math.sign(v) * 0.16) / 0.84), b = (i) => (gp.buttons[i] ? gp.buttons[i].value : 0);
   const st = { lx: dz(gp.axes[0] || 0), rx: dz(gp.axes[2] || 0), ry: dz(gp.axes[3] || 0), b };
   const used = Math.abs(st.lx) + Math.abs(st.rx) + Math.abs(st.ry) > 0 || gp.buttons.some((x) => x.pressed);
@@ -2965,15 +2976,15 @@ elTasks.addEventListener("click", (e) => { if (e.target.id === "leave") goSite("
 const row = (ok, text, cls = "") => `<div class="${cls} ${ok ? "done" : ""}">${ok ? "&#10003;" : "&#9675;"} ${text}</div>`;
 const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", G: "KeyG", R: "KeyR", H: "KeyH", C: "KeyC", O: "KeyO", L: "KeyL", Enter: "Enter", Space: "Space",
   "&uarr;": "ArrowUp", "&darr;": "ArrowDown", "&larr;": "ArrowLeft", "&rarr;": "ArrowRight" };
-const K = (k) => { const t = pad.on && KEY_CODE[k] ? PAD_LABEL[KEY_CODE[k]] : k; return t ? `<kbd>${t}</kbd>` : ""; };
+const K = (k) => { const t = pad.on && KEY_CODE[k] ? PB(PAD_LABEL[KEY_CODE[k]]) : k; return t ? `<kbd>${t}</kbd>` : ""; };
 const elHelp = document.getElementById("help"), HELP_KEYS = elHelp.innerHTML;
 function refreshHelp() {
   elHelp.innerHTML = !pad.on ? HELP_KEYS : `<b>Controller</b><br>
-    <kbd>Left stick</kbd> steer &nbsp; <kbd>RT</kbd> drive &nbsp; <kbd>LT</kbd> reverse &nbsp; <kbd>A</kbd> brake<br>
-    <kbd>RB</kbd><kbd>LB</kbd> raise / lower arms &nbsp; <kbd>X</kbd><kbd>B</kbd> curl / dump<br>
-    <kbd>Y</kbd> winch hook / unhook &nbsp; <kbd>D-pad &uarr;</kbd><kbd>&darr;</kbd> reel in / out<br>
+    <kbd>Left stick</kbd> steer &nbsp; <kbd>${PB("RT")}</kbd> drive &nbsp; <kbd>${PB("LT")}</kbd> reverse &nbsp; <kbd>${PB("A")}</kbd> brake<br>
+    <kbd>${PB("RB")}</kbd><kbd>${PB("LB")}</kbd> raise / lower arms &nbsp; <kbd>${PB("X")}</kbd><kbd>${PB("B")}</kbd> curl / dump<br>
+    <kbd>${PB("Y")}</kbd> winch hook / unhook &nbsp; <kbd>D-pad &uarr;</kbd><kbd>&darr;</kbd> reel in / out<br>
     <kbd>D-pad &rarr;</kbd> switch vehicle &nbsp; <kbd>D-pad &larr;</kbd> paint shop (garage or pink shop)<br>
-    <kbd>View</kbd> reset &nbsp; <kbd>Menu</kbd> hints / skip line &nbsp; <kbd>L3</kbd> overlay<br>
+    <kbd>${PB("View")}</kbd> reset &nbsp; <kbd>${PB("Menu")}</kbd> hints / skip line &nbsp; <kbd>L3</kbd> ${SITE === "night" ? "headlights" : "overlay"}<br>
 <kbd>Right stick</kbd> look &nbsp; <kbd>R3</kbd> recenter`;
   if (customOpen) renderCustom();
   popups.setSkipLabel(`${K("Enter")} skip`);
