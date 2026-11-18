@@ -2251,7 +2251,7 @@ function findTarget() {
     for (const lp of p.anchorsLocal) consider(1, p.index, lp, bodyPoint(p.body, lp, _wb), p.name);
   }
   anchors.forEach((a, i) => consider(2, i, null, a.pos, a.name));
-  for (const pr of net.peers.values()) if (pr.seen) consider(3, pr.id, ZV, bodyPoint(pr.loader.body, ZV, _wb), pr.name + "'s loader");
+  for (const pr of net.peers.values()) if (pr.seen && !((noHookUntil.get(pr.id) || 0) > performance.now())) consider(3, pr.id, ZV, bodyPoint(pr.loader.body, ZV, _wb), pr.name + "'s loader");
   return best;
 }
 function hookOn(t) {
@@ -2260,6 +2260,22 @@ function hookOn(t) {
   winch.len = Math.min(WINCH.max, t.dist + 0.3);
 }
 function hookOff() { winch.on = false; winch.T = 0; }
+// Cutting a friend's rope off your loader: my game stops feeling it at once, their game drops it when the
+// message arrives, and they can't hook me again for a few seconds.
+const ropeCut = new Map(), noHookUntil = new Map(), CUT_IGNORE = 3000, CUT_BLOCK = 10000;
+function hookedOnMe() {
+  const now = performance.now(), out = [];
+  for (const pr of net.peers.values()) if (pr.seen && pr.h && pr.h[0] === 3 && pr.h[1] === net.id && !((ropeCut.get(pr.id) || 0) > now)) out.push(pr);
+  return out;
+}
+function cutWinches() {
+  const list = hookedOnMe();
+  if (!list.length) return false;
+  for (const pr of list) { ropeCut.set(pr.id, performance.now() + CUT_IGNORE); send({ t: "to", to: pr.id, m: { t: "cut" } }); }
+  sfx.thunk();
+  showBanner(`<b>Unhooked</b>${list.map((pr) => pr.name).join(" and ")}'s winch is off you.`, 2500);
+  return true;
+}
 function toggleWinch() {
   if (winch.on) return hookOff();
   const t = findTarget();
@@ -2316,7 +2332,7 @@ function winchStep() {
   // other players' ropes hooked to me: my game pulls my loader towards their hook
   for (const pr of net.peers.values()) {
     const h = pr.h;
-    if (!h || h[0] !== 3 || h[1] !== net.id || !pr.seen) continue;
+    if (!h || h[0] !== 3 || h[1] !== net.id || !pr.seen || (ropeCut.get(pr.id) || 0) > performance.now()) continue;
     const A = bodyPoint(pr.loader.body, HOOK, _wa), B = bodyPoint(chassis, ZV, _wb), vB = pointVel(chassis, B, _wv2);
     const T = ropeTension(h[5], A, _wv.set(0, 0, 0), B, vB, L.mass * 0.5);
     if (T > 0) { const J = T * DT; chassis.applyImpulse({ x: -_wd.x * J, y: -_wd.y * J, z: -_wd.z * J }, true); }
@@ -2650,6 +2666,11 @@ function connect(room, name) {
 function onPeerMessage(from, m) {
   if (m.t === "sync") return applySync(m);
   if (m.t === "ld") { if (me.kind === "truck") addLoad(+m.v || 0, +m.g || 0); return; }      // a friend tipped their bucket into my truck
+  if (m.t === "cut") {                                                                         // a friend unhooked my winch from their loader
+    noHookUntil.set(from, performance.now() + CUT_BLOCK);
+    if (winch.on && winch.kind === 3 && winch.ref === from) { hookOff(); const pn = net.peers.get(from); showBanner(`<b>${pn ? pn.name : "Your friend"} unhooked your winch</b>`, 2500); }
+    return;
+  }
   const peer = net.peers.get(from);
   if (m.t !== "s" || !peer) return;
   peer.snaps.push({ at: performance.now(), p: m.p, q: m.q, a: m.a, b: m.b, w: m.w, l: m.l, v: m.v, bd: m.bd || 0 });
@@ -2865,7 +2886,7 @@ const PAD_NAMES = {
 };
 const PB = (n) => PAD_NAMES[pad.style][n] ?? n;
 const PAD_LABEL = { KeyW: "RT", KeyS: "LT", KeyA: "Left stick", KeyD: "", Space: "A", ArrowUp: "RB", ArrowDown: "LB", ArrowLeft: "X", ArrowRight: "B",
-  KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyG: "D-pad &larr;", KeyR: "View", KeyC: "R3", KeyH: "Menu", KeyO: "L3", KeyL: "L3", Enter: "Menu" };
+  KeyE: "Y", KeyQ: "D-pad &uarr;", KeyX: "D-pad &darr;", KeyF: "D-pad &rarr;", KeyG: "D-pad &larr;", KeyR: "View", KeyC: "R3", KeyH: "Menu", KeyO: "L3", KeyL: "L3", Enter: "Menu", KeyZ: "D-pad &larr;" };
 function readPad() {
   const list = navigator.getGamepads ? navigator.getGamepads() : [];
   let gp = null;
@@ -2888,7 +2909,8 @@ function readPad() {
       if (hit(14)) stepLook(-1);
       if (hit(15)) stepLook(1);
       if (hit(0) || hit(1)) closeCustom();
-    } else if (hit(14) && (switchPad() === "garage" || inPaintShop())) openCustom();
+    } else if (hit(14) && running && cutWinches()) { /* D-pad left first unhooks a friend's winch from you */ }
+    else if (hit(14) && (switchPad() === "garage" || inPaintShop())) openCustom();
     else {
       if (hit(3)) toggleWinch();
       if (hit(15)) switchVehicle();
@@ -2940,6 +2962,7 @@ addEventListener("keydown", (e) => {
   if (e.code === "KeyR") resetLoader();
   if (e.code === "KeyC") { cam.offset = 0; cam.pitch = CAM_PITCH; cam.dist = CAM_DIST; }
   if (e.code === "KeyE" && running) toggleWinch();
+  if (e.code === "KeyZ" && running) cutWinches();
   if (e.code === "KeyF" && running) switchVehicle();
   if (e.code === "KeyG" && running) openCustom();
   if (e.code === "KeyP") {
@@ -2974,7 +2997,7 @@ let bannerTimer = 0;
 function showBanner(html, ms) { elBanner.innerHTML = html; elBanner.style.display = "block"; clearTimeout(bannerTimer); bannerTimer = setTimeout(() => { elBanner.style.display = "none"; }, ms); }
 elTasks.addEventListener("click", (e) => { if (e.target.id === "leave") goSite("hub"); });
 const row = (ok, text, cls = "") => `<div class="${cls} ${ok ? "done" : ""}">${ok ? "&#10003;" : "&#9675;"} ${text}</div>`;
-const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", G: "KeyG", R: "KeyR", H: "KeyH", C: "KeyC", O: "KeyO", L: "KeyL", Enter: "Enter", Space: "Space",
+const KEY_CODE = { W: "KeyW", A: "KeyA", S: "KeyS", D: "KeyD", E: "KeyE", Q: "KeyQ", X: "KeyX", F: "KeyF", G: "KeyG", R: "KeyR", H: "KeyH", C: "KeyC", O: "KeyO", L: "KeyL", Z: "KeyZ", Enter: "Enter", Space: "Space",
   "&uarr;": "ArrowUp", "&darr;": "ArrowDown", "&larr;": "ArrowLeft", "&rarr;": "ArrowRight" };
 const K = (k) => { const t = pad.on && KEY_CODE[k] ? PB(PAD_LABEL[KEY_CODE[k]]) : k; return t ? `<kbd>${t}</kbd>` : ""; };
 const elHelp = document.getElementById("help"), HELP_KEYS = elHelp.innerHTML;
@@ -2983,7 +3006,7 @@ function refreshHelp() {
     <kbd>Left stick</kbd> steer &nbsp; <kbd>${PB("RT")}</kbd> drive &nbsp; <kbd>${PB("LT")}</kbd> reverse &nbsp; <kbd>${PB("A")}</kbd> brake<br>
     <kbd>${PB("RB")}</kbd><kbd>${PB("LB")}</kbd> raise / lower arms &nbsp; <kbd>${PB("X")}</kbd><kbd>${PB("B")}</kbd> curl / dump<br>
     <kbd>${PB("Y")}</kbd> winch hook / unhook &nbsp; <kbd>D-pad &uarr;</kbd><kbd>&darr;</kbd> reel in / out<br>
-    <kbd>D-pad &rarr;</kbd> switch vehicle &nbsp; <kbd>D-pad &larr;</kbd> paint shop (garage or pink shop)<br>
+    <kbd>D-pad &rarr;</kbd> switch vehicle &nbsp; <kbd>D-pad &larr;</kbd> paint shop (garage or pink shop), or unhook a friend's winch from you<br>
     <kbd>${PB("View")}</kbd> reset &nbsp; <kbd>${PB("Menu")}</kbd> hints / skip line &nbsp; <kbd>L3</kbd> ${SITE === "night" ? "headlights" : "overlay"}<br>
 <kbd>Right stick</kbd> look &nbsp; <kbd>R3</kbd> recenter`;
   if (customOpen) renderCustom();
@@ -4274,6 +4297,8 @@ function syncVisuals(dt, now = performance.now()) {
     const strain = winch.T / WINCH.tmax;
     pr = `Winch on <b>${winch.name}</b> &middot; rope ${winch.len.toFixed(0)} m ${strain > 0.95 ? '<span class="hot">&middot; full power</span>' : strain > 0.05 ? "&middot; pulling" : ""}<br>${K("Q")} reel in &nbsp; ${K("X")} let out &nbsp; ${K("E")} unhook`;
   } else if (target && running) pr = `${K("E")} hook winch to <b>${target.name}</b> (${target.dist.toFixed(0)} m)`;
+  const onMe = running ? hookedOnMe() : [];
+  if (onMe.length) pr += `${pr ? "<br>" : ""}<b>${onMe.map((x) => x.name).join(" and ")}</b>'s winch is on you &middot; ${K("Z")} unhook it`;
   if (padNow && running && !customOpen) { const nk = nextKind(); pr += `${pr ? "<br>" : ""}${nk ? `${K("F")} switch to the <b>${KINDS[nk].name}</b>` : "No other vehicles unlocked yet"}`; }
   const inPaint = inPaintShop();
   if ((padNow === "garage" || inPaint) && running && !customOpen) pr += `${pr ? "<br>" : ""}${K("G")} paint shop`;
@@ -4343,7 +4368,7 @@ else if (params.get("solo")) begin();
 
 // hooks for automated checks
 window.__game = { SITE, world, chassis, vehicle, props, anchors, boulders, logs, stump: () => stump, tractor: () => tractor, input, me, job, L, WINCH, FARM, HUB, net, winch, heights, heightAt, mudAt, slopeAt,
-  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, HAUL, FLOOD, hopper: () => hopper, gate: () => gatePanel, cars, floodBreaks, townDry, wheelAnchor: () => wheelAnchor, leveeCrest, coverOf, padCells, gravH, nextKind, blockLog: () => blockLog, blockRocks, fordRocks, picnic: () => picnic, openCustom, closeCustom, setLook, stepLook, get myLook() { return myLook; }, get customOpen() { return customOpen; }, applyLook, cleanLook, RIDGE, ridgeRoad, cabin: () => cabin, firewood: () => firewood, ridgeRocks, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
+  physicsStep, syncVisuals, checkFarm, checkHub, resetLoader, placeLoader, cam, join, begin, buildSync, findTarget, toggleWinch, hookOff, hookedOnMe, cutWinches, setFlag, setActiveBoulders, houses, barn, enter, pad, tick, HAUL, FLOOD, hopper: () => hopper, gate: () => gatePanel, cars, floodBreaks, townDry, wheelAnchor: () => wheelAnchor, leveeCrest, coverOf, padCells, gravH, nextKind, blockLog: () => blockLog, blockRocks, fordRocks, picnic: () => picnic, openCustom, closeCustom, setLook, stepLook, get myLook() { return myLook; }, get customOpen() { return customOpen; }, applyLook, cleanLook, RIDGE, ridgeRoad, cabin: () => cabin, firewood: () => firewood, ridgeRocks, KINDS, setKind, switchVehicle, switchPad, displays, YARD, RIVER, layGravel, gravel, crate: () => crate, toolbox: () => toolbox, riverRocks, safe,
   get flags() { return flags; }, FL, parts, obj: () => obj, popups, say, overlay, cycleOverlay, pack, cutFill, measureCutFill, starsEarned, starChecks, get progress() { return progress; }, finishLevel, get target() { return target; }, get grip() { return gripNow; },
   run(steps, set = {}) { Object.assign(input, set); for (let i = 0; i < steps; i++) physicsStep(); syncVisuals(DT); target = !winch.on ? findTarget() : null; siteCheck(); },
   render() { renderer.render(scene, camera); },
